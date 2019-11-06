@@ -38,6 +38,8 @@ add_llvm_external_project(llgo)
 add_llvm_external_project(lld)
 add_llvm_external_project(lldb)
 add_llvm_external_project(mlir)
+# Flang depends on mlir, so place it afterward
+add_llvm_external_project(flang)
 
 # Automatically add remaining sub-directories containing a 'CMakeLists.txt'
 # file as external projects.
