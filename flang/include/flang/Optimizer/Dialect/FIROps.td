@@ -1580,7 +1580,222 @@ def fir_BoxTypeDescOp : fir_SimpleOneResultOp<"box_tdesc", [NoSideEffect]> {
   let results = (outs fir_TypeDescType);
 }
 
+//===----------------------------------------------------------------------===//
+// Array value operations
+//===----------------------------------------------------------------------===//
+
+def fir_ArrayLoadOp : fir_Op<"array_load", [AttrSizedOperandSegments]> {
+
+  let summary = "Load an array as a value.";
+
+  let description = [{
+    Load an entire array as a value.
+
+    ```fortran
+      real :: a(o:n,p:m)
+      ...
+      ... = ... a ...
+    ```
+
+    One can use `fir.array_load` to copy the entire value of `a` in an array
+    expression as shown above. The array value returned is immutable. This
+    operation let's one load an array as a value while applying a runtime
+    shape, shift, or slice to the memory reference.
+    
+    ```mlir
+      %s = fir.shape_shift %o, %n, %p, %m : (index, index, index, index) -> !fir.shape<2>
+      // load the entire array 'a'
+      %v = fir.array_load %a(%s) : (!fir.ref<!fir.array<?x?xf32>>, !fir.shape<2>) -> !fir.array<?x?xf32>
+    ```
+  }];
+
+  let arguments = (ins
+    Arg<AnyReferenceLike, "", [MemRead]>:$memref,
+    Optional<AnyShapeType>:$shape,
+    Optional<fir_SliceType>:$slice,
+    Variadic<AnyIntegerType>:$lenParams
+  );
+
+  let results = (outs fir_SequenceType);
+
+  let assemblyFormat = [{
+    $memref (`(`$shape^`)`)? (`[`$slice^`]`)? (`typeparams` $lenParams^)? attr-dict `:` functional-type(operands, results)
+  }];
+
+  let verifier = [{
+    auto eleTy = fir::dyn_cast_ptrEleTy(memref().getType());
+    if (!eleTy)
+       return emitOpError("must be a reference type");
+    auto arrTy = eleTy.dyn_cast<fir::SequenceType>();
+    if (!arrTy)
+      return emitOpError("must be a reference to an array");
+    auto arrDim = arrTy.getDimension();
+
+    if (auto shapeOp = shape()) {
+      auto shapeTy = shapeOp.getType();
+      unsigned shapeTyRank = 0;
+      if (auto s = shapeTy.dyn_cast<fir::ShapeType>()) {
+        shapeTyRank = s.getRank();
+      } else {
+        auto ss = shapeTy.cast<fir::ShapeShiftType>();
+        shapeTyRank = ss.getRank();
+      }
+      if (arrDim && arrDim != shapeTyRank)
+        return emitOpError("rank of dimension mismatched");
+    }
+
+    if (auto sliceOp = slice()) {
+      if (auto sliceTy = sliceOp.getType().dyn_cast<fir::SliceType>()) {
+        if (sliceTy.getRank() != arrDim)
+          return emitOpError("rank of dimension in slice mismatched");
+      }
+    }
+
+    return mlir::success();
+  }];
+}
+
+def fir_ArrayFetchOp : fir_Op<"array_fetch", [NoSideEffect]> {
+
+  let summary = "Fetch the value of an element of an array value";
+
+  let description = [{
+    Fetch the value of an element in an array value.
+
+    ```fortran
+      real :: a(n,m)
+      ...
+      ... a ...
+    ```
+
+    One can use `fir.array_fetch` to fetch the (implied) value of `a(i,j)` in
+    an array expression as shown above.
+
+    ```mlir
+      %s = fir.shape %n, %m : (index, index) -> !fir.shape<2>
+      // load the entire array 'a'
+      %v = fir.array_load %a(%s) : (!fir.ref<!fir.array<?x?xf32>>, !fir.shape<2>) -> !fir.array<?x?xf32>
+      // fetch the value of one of the array value's elements
+      %1 = fir.array_fetch %v, %i, %j : (!fir.array<?x?xf32>, index, index) -> f32
+    ```
+  }];
+
+  let arguments = (ins
+    fir_SequenceType:$sequence,
+    Variadic<AnyCoordinateType>:$indices
+  );
+
+  let results = (outs AnyType:$element);
+
+  let assemblyFormat = [{
+    $sequence `,` $indices attr-dict `:` functional-type(operands, results)
+  }];
+
+  let verifier = [{
+    auto arrTy = sequence().getType().cast<fir::SequenceType>();
+    if (indices().size() != arrTy.getDimension())
+      return emitOpError("number of indices != dimension of array");
+    if (element().getType() != arrTy.getEleTy())
+      return emitOpError("return type does not match array");
+    return mlir::success();
+  }];
+}
+
+def fir_ArrayUpdateOp : fir_Op<"array_update", [NoSideEffect]> {
+
+  let summary = "Update the value of an element of an array value";
+
+  let description = [{
+    Update the value of an element in an array value. A new array value is
+    returned where all element values of the input array are identical except
+    for the selected element which is the value passed in the update.
+
+    ```fortran
+      real :: a(n,m)
+      ...
+      a = ...
+    ```
+
+    One can use `fir.array_update` to update the (implied) value of `a(i,j)`
+    in an array expression as shown above.
+
+    ```mlir
+      %s = fir.shape %n, %m : (index, index) -> !fir.shape<2>
+      // load the entire array 'a'
+      %v = fir.array_load %a(%s) : (!fir.ref<!fir.array<?x?xf32>>, !fir.shape<2>) -> !fir.array<?x?xf32>
+      // update the value of one of the array value's elements
+      // %r_{ij} = %f  if (i,j) = (%i,%j),   %v_{ij} otherwise
+      %r = fir.array_update %v, %f, %i, %j : (!fir.array<?x?xf32>, f32, index, index) -> !fir.array<?x?xf32>
+      fir.array_store %r to %a : !fir.ref<!fir.array<?x?xf32>>
+    ```
+  }];
+
+  let arguments = (ins
+    fir_SequenceType:$sequence,
+    AnyType:$merge,
+    Variadic<AnyCoordinateType>:$indices
+  );
+
+  let results = (outs fir_SequenceType);
+
+  let assemblyFormat = [{
+    $sequence `,` $merge `,` $indices attr-dict `:` functional-type(operands, results)
+  }];
+
+  let verifier = [{
+    auto arrTy = sequence().getType().cast<fir::SequenceType>();
+    if (merge().getType() != arrTy.getEleTy())
+      return emitOpError("merged value does not have element type");
+    if (indices().size() != arrTy.getDimension())
+      return emitOpError("number of indices != dimension of array");
+    return mlir::success();
+  }];
+}
+
+def fir_ArrayStoreOp : fir_Op<"array_store", [
+    TypesMatchWith<"type of 'sequence' matches element type of 'memref'",
+                     "memref", "sequence",
+                     "fir::dyn_cast_ptrEleTy($_self)">]> {
+
+  let summary = "Store an array value to memory.";
+
+  let description = [{
+    Store an entire array value to memory.
+
+    ```fortran
+      real :: a(n,m)
+      ...
+      a = ...
+    ```
+
+    One can use `fir.array_store` to copy the entire value of `a` in an array
+    expression as shown above.
+    
+    ```mlir
+      %r = fir.array_update %v, %f, %i, %j : (!fir.array<?x?xf32>, f32, index, index) -> !fir.array<?x?xf32>
+      fir.array_store %r to %a : !fir.ref<!fir.array<?x?xf32>>
+    ```
+  }];
+
+  let arguments = (ins
+    fir_SequenceType:$sequence,
+    Arg<AnyReferenceLike, "", [MemWrite]>:$memref
+  );
+
+  let assemblyFormat = "$sequence `to` $memref attr-dict `:` type($memref)";
+
+  let verifier = [{
+    auto eleTy = fir::dyn_cast_ptrEleTy(memref().getType());
+    if (eleTy != sequence().getType())
+       return emitOpError("array type does not match reference");
+    return mlir::success();
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Record and array type operations
+//===----------------------------------------------------------------------===//
+
 def fir_ArrayCoorOp : fir_Op<"array_coor",
     [NoSideEffect, AttrSizedOperandSegments]> {
 
@@ -2196,6 +2411,11 @@ def fir_DoLoopOp : region_Op<"do_loop",
       getOperation()->setAttr(unorderedAttrName(),
                               mlir::UnitAttr::get(getContext()));
     }
+    
+    mlir::BlockArgument iterArgToBlockArg(mlir::Value iterArg);
+    void resultToSourceOps(llvm::SmallVectorImpl<mlir::Value> &results,
+                           unsigned resultNum);
+    mlir::Value blockArgToSourceOp(unsigned blockArgNum);
   }];
 }
 
@@ -2232,16 +2452,19 @@ def fir_IfOp : region_Op<"if", [NoRegionArguments]> {
   ];
 
   let extraClassDeclaration = [{
-    mlir::OpBuilder getWhereBodyBuilder() {
+    mlir::OpBuilder getThenBodyBuilder() {
       assert(!thenRegion().empty() && "Unexpected empty 'where' region.");
       mlir::Block &body = thenRegion().front();
       return mlir::OpBuilder(&body, std::prev(body.end()));
     }
-    mlir::OpBuilder getOtherBodyBuilder() {
+    mlir::OpBuilder getElseBodyBuilder() {
       assert(!elseRegion().empty() && "Unexpected empty 'other' region.");
       mlir::Block &body = elseRegion().front();
       return mlir::OpBuilder(&body, std::prev(body.end()));
     }
+    
+    void resultToSourceOps(llvm::SmallVectorImpl<mlir::Value> &results,
+                           unsigned resultNum);
   }];
 }
 
@@ -2330,6 +2553,11 @@ def fir_IterWhileOp : region_Op<"iterate_while",
     unsigned getNumIterOperands() {
       return getOperation()->getNumOperands() - getNumControlOperands();
     }
+
+    mlir::BlockArgument iterArgToBlockArg(mlir::Value iterArg);
+    void resultToSourceOps(llvm::SmallVectorImpl<mlir::Value> &results,
+                           unsigned resultNum);
+    mlir::Value blockArgToSourceOp(unsigned blockArgNum);
   }];
 }
 

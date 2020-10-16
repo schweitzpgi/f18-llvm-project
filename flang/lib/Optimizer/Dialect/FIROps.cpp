@@ -777,6 +777,27 @@ fir::IterWhileOp::moveOutOfLoop(llvm::ArrayRef<mlir::Operation *> ops) {
   return success();
 }
 
+mlir::BlockArgument fir::IterWhileOp::iterArgToBlockArg(mlir::Value iterArg) {
+  for (auto i : llvm::enumerate(initArgs()))
+    if (iterArg == i.value())
+      return region().front().getArgument(i.index() + 1);
+  return {};
+}
+
+void fir::IterWhileOp::resultToSourceOps(
+    llvm::SmallVectorImpl<mlir::Value> &results, unsigned resultNum) {
+  auto oper = finalValue() ? resultNum : resultNum + 1;
+  auto *term = region().front().getTerminator();
+  if (oper < term->getNumOperands())
+    results.push_back(term->getOperand(oper));
+}
+
+mlir::Value fir::IterWhileOp::blockArgToSourceOp(unsigned blockArgNum) {
+  if (blockArgNum > 0 && blockArgNum <= initArgs().size())
+    return initArgs()[blockArgNum - 1];
+  return {};
+}
+
 //===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
@@ -986,6 +1007,33 @@ fir::DoLoopOp::moveOutOfLoop(llvm::ArrayRef<mlir::Operation *> ops) {
   for (auto op : ops)
     op->moveBefore(*this);
   return success();
+}
+
+/// Translate a value passed as an iter_arg to the corresponding block argument
+/// in the body of the loop.
+mlir::BlockArgument fir::DoLoopOp::iterArgToBlockArg(mlir::Value iterArg) {
+  for (auto i : llvm::enumerate(initArgs()))
+    if (iterArg == i.value())
+      return region().front().getArgument(i.index() + 1);
+  return {};
+}
+
+/// Translate the result vector (by index number) to the corresponding value to
+/// the `fir.result` Op.
+void fir::DoLoopOp::resultToSourceOps(
+    llvm::SmallVectorImpl<mlir::Value> &results, unsigned resultNum) {
+  auto oper = finalValue() ? resultNum : resultNum + 1;
+  auto *term = region().front().getTerminator();
+  if (oper < term->getNumOperands())
+    results.push_back(term->getOperand(oper));
+}
+
+/// Translate the block argument (by index number) to the corresponding value
+/// passed as an iter_arg to the parent DoLoopOp.
+mlir::Value fir::DoLoopOp::blockArgToSourceOp(unsigned blockArgNum) {
+  if (blockArgNum > 0 && blockArgNum <= initArgs().size())
+    return initArgs()[blockArgNum - 1];
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1508,6 +1556,16 @@ static void print(mlir::OpAsmPrinter &p, fir::IfOp op) {
                   printBlockTerminators);
   }
   p.printOptionalAttrDict(op.getAttrs());
+}
+
+void fir::IfOp::resultToSourceOps(llvm::SmallVectorImpl<mlir::Value> &results,
+                                  unsigned resultNum) {
+  auto *term = thenRegion().front().getTerminator();
+  if (resultNum < term->getNumOperands())
+    results.push_back(term->getOperand(resultNum));
+  term = elseRegion().front().getTerminator();
+  if (resultNum < term->getNumOperands())
+    results.push_back(term->getOperand(resultNum));
 }
 
 //===----------------------------------------------------------------------===//

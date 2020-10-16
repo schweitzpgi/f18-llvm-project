@@ -16,11 +16,9 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
-#include "llvm/Support/CommandLine.h"
 
 #define DEBUG_TYPE "flang-affine-promotion"
 
