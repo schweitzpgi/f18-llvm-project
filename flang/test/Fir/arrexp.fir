@@ -11,6 +11,6 @@ func @f1(%a : !fir.ref<!fir.array<?x?xf32>>, %n : index, %m : index, %o : index,
     }
     fir.result %r : !fir.array<?x?xf32>
   }
-  fir.array_store %r to %a : !fir.ref<!fir.array<?x?xf32>>
+  fir.array_merge_store %vIn, %r to %a : !fir.ref<!fir.array<?x?xf32>>
   return
 }

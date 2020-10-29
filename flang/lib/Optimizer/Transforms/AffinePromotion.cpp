@@ -432,7 +432,7 @@ public:
                   mlir::PatternRewriter &rewriter) const override {
     LLVM_DEBUG(llvm::dbgs() << "AffineLoopConversion: rewriting loop:\n";
                loop.dump(););
-    [[maybe_unused]] auto loopAnalysis =
+    LLVM_ATTRIBUTE_UNUSED auto loopAnalysis =
         functionAnalysis.getChildLoopAnalysis(loop);
     auto &loopOps = loop.getBody()->getOperations();
     auto loopAndIndex = createAffineFor(loop, rewriter);

@@ -1589,7 +1589,7 @@ def fir_ArrayLoadOp : fir_Op<"array_load", [AttrSizedOperandSegments]> {
   let summary = "Load an array as a value.";
 
   let description = [{
-    Load an entire array as a value.
+    Load an entire array as a single SSA value.
 
     ```fortran
       real :: a(o:n,p:m)
@@ -1597,15 +1597,18 @@ def fir_ArrayLoadOp : fir_Op<"array_load", [AttrSizedOperandSegments]> {
       ... = ... a ...
     ```
 
-    One can use `fir.array_load` to copy the entire value of `a` in an array
-    expression as shown above. The array value returned is immutable. This
-    operation let's one load an array as a value while applying a runtime
-    shape, shift, or slice to the memory reference.
+    One can use `fir.array_load` to produce an ssa-value that captures an
+    immutable value of the entire array `a`, as in the Fortran array expression
+    shown above. Subsequent changes to the memory containing the array do not
+    alter its composite value. This operation let's one load an array as a
+    value while applying a runtime shape, shift, or slice to the memory
+    reference, and its semantics guarantee immutability.
     
     ```mlir
       %s = fir.shape_shift %o, %n, %p, %m : (index, index, index, index) -> !fir.shape<2>
       // load the entire array 'a'
       %v = fir.array_load %a(%s) : (!fir.ref<!fir.array<?x?xf32>>, !fir.shape<2>) -> !fir.array<?x?xf32>
+      // a fir.store here into array %a does not change %v
     ```
   }];
 
@@ -1666,10 +1669,12 @@ def fir_ArrayFetchOp : fir_Op<"array_fetch", [NoSideEffect]> {
       real :: a(n,m)
       ...
       ... a ...
+      ... a(r,s+1) ...
     ```
 
     One can use `fir.array_fetch` to fetch the (implied) value of `a(i,j)` in
-    an array expression as shown above.
+    an array expression as shown above. It can also be used to extract the
+    element `a(r,s+1)` in the second expression.
 
     ```mlir
       %s = fir.shape %n, %m : (index, index) -> !fir.shape<2>
@@ -1706,7 +1711,7 @@ def fir_ArrayUpdateOp : fir_Op<"array_update", [NoSideEffect]> {
   let summary = "Update the value of an element of an array value";
 
   let description = [{
-    Update the value of an element in an array value. A new array value is
+    Updates the value of an element in an array value. A new array value is
     returned where all element values of the input array are identical except
     for the selected element which is the value passed in the update.
 
@@ -1726,8 +1731,13 @@ def fir_ArrayUpdateOp : fir_Op<"array_update", [NoSideEffect]> {
       // update the value of one of the array value's elements
       // %r_{ij} = %f  if (i,j) = (%i,%j),   %v_{ij} otherwise
       %r = fir.array_update %v, %f, %i, %j : (!fir.array<?x?xf32>, f32, index, index) -> !fir.array<?x?xf32>
-      fir.array_store %r to %a : !fir.ref<!fir.array<?x?xf32>>
+      fir.array_merge_store %v, %r to %a : !fir.ref<!fir.array<?x?xf32>>
     ```
+
+    An array value update behaves as if a mapping function from the indices
+    to the new value has been added, replacing the previous mapping. These
+    mappings can be added to the ssa-value, but will not be materialized in
+    memory until the `fir.array_merge_store` is performed.
   }];
 
   let arguments = (ins
@@ -1752,15 +1762,18 @@ def fir_ArrayUpdateOp : fir_Op<"array_update", [NoSideEffect]> {
   }];
 }
 
-def fir_ArrayStoreOp : fir_Op<"array_store", [
+def fir_ArrayMergeStoreOp : fir_Op<"array_merge_store", [
+    TypesMatchWith<"type of 'original' matches element type of 'memref'",
+                     "memref", "original",
+                     "fir::dyn_cast_ptrEleTy($_self)">,
     TypesMatchWith<"type of 'sequence' matches element type of 'memref'",
                      "memref", "sequence",
                      "fir::dyn_cast_ptrEleTy($_self)">]> {
 
-  let summary = "Store an array value to memory.";
+  let summary = "Store merged array value to memory.";
 
   let description = [{
-    Store an entire array value to memory.
+    Store a merged array value to memory.
 
     ```fortran
       real :: a(n,m)
@@ -1768,26 +1781,30 @@ def fir_ArrayStoreOp : fir_Op<"array_store", [
       a = ...
     ```
 
-    One can use `fir.array_store` to copy the entire value of `a` in an array
-    expression as shown above.
+    One can use `fir.array_merge_store` to merge/copy the value of `a` in an
+    array expression as shown above.
     
     ```mlir
+      %v = fir.array_load %a(%shape) : ...
       %r = fir.array_update %v, %f, %i, %j : (!fir.array<?x?xf32>, f32, index, index) -> !fir.array<?x?xf32>
-      fir.array_store %r to %a : !fir.ref<!fir.array<?x?xf32>>
+      fir.array_merge_store %v, %r to %a : !fir.ref<!fir.array<?x?xf32>>
     ```
+
+    This operation merges the original loaded array value, `%v`, with the
+    chained updates, `%r`, and stores the result to the array at address, `%a`.
   }];
 
   let arguments = (ins
+    fir_SequenceType:$original,
     fir_SequenceType:$sequence,
     Arg<AnyReferenceLike, "", [MemWrite]>:$memref
   );
 
-  let assemblyFormat = "$sequence `to` $memref attr-dict `:` type($memref)";
+  let assemblyFormat = "$original `,` $sequence `to` $memref attr-dict `:` type($memref)";
 
   let verifier = [{
-    auto eleTy = fir::dyn_cast_ptrEleTy(memref().getType());
-    if (eleTy != sequence().getType())
-       return emitOpError("array type does not match reference");
+    if (!isa<ArrayLoadOp>(original().getDefiningOp()))
+       return emitOpError("operand #0 must be result of a fir.array_load op.");
     return mlir::success();
   }];
 }

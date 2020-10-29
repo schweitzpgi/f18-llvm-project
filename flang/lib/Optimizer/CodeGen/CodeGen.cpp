@@ -1972,7 +1972,7 @@ struct SelectCaseOpConversion : public FIROpConversion<fir::SelectCaseOp> {
     auto attrName = fir::SelectCaseOp::getCasesAttr();
     auto cases = caseOp.getAttrOfType<mlir::ArrayAttr>(attrName).getValue();
     // Type can be CHARACTER, INTEGER, or LOGICAL (C1145)
-    [[maybe_unused]] auto ty = caseOp.getSelector().getType();
+    LLVM_ATTRIBUTE_UNUSED auto ty = caseOp.getSelector().getType();
     auto selector = caseOp.getSelector(operands);
     auto loc = caseOp.getLoc();
     assert(conds > 0 && "fir.selectcase must have cases");
