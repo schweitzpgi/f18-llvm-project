@@ -104,6 +104,7 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
     passPipeline.addToPipeline(pm);
   } else {
     // simplify the IR
+    pm.addPass(fir::createArrayValueCopyPass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(fir::createCSEPass());
     pm.addPass(mlir::createInlinerPass());

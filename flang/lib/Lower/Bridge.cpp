@@ -1463,16 +1463,44 @@ private:
                                         context);
   }
 
+  /// Convert the rhs of an array expression to elemental form in context.
   fir::ExtendedValue genExprEleValue(const Fortran::lower::SomeExpr &expr,
                                      llvm::ArrayRef<mlir::Value> lcvs) {
+    Fortran::lower::ExpressionContext context(lcvs, /*lhs=*/false);
     return createSomeExtendedExpression(toLocation(), *this, expr, localSymbols,
-                                        lcvs);
+                                        context);
   }
 
+  /// Convert the lhs of an array assignment to elemental form in the context.
   fir::ExtendedValue genExprEleAddr(const Fortran::lower::SomeExpr &expr,
                                     llvm::ArrayRef<mlir::Value> lcvs) {
+    Fortran::lower::ExpressionContext context(lcvs, /*lhs=*/true);
     return createSomeExtendedAddress(toLocation(), *this, expr, localSymbols,
-                                     lcvs);
+                                     context);
+  }
+
+  /// Array assignment.
+  /// 1. Evaluate the entire rhs on an element-by-element basis. Apply scalar
+  /// expansion as needed.
+  /// 2. Evaluate the access map expression of the lhs completely.
+  /// 3. Copy the results from (1) to the lhs array per the map (2).
+  void genArrayAssignment(const Fortran::evaluate::Assignment &assign,
+                          bool isHeap) {
+    auto loc = toLocation();
+    auto optShape = getShape(assign.lhs);
+    assert(optShape.has_value() && "array has no shape");
+    auto shape = *optShape;
+    localSymbols.pushScope();
+    llvm::SmallVector<mlir::Value, 8> lcvs;
+    assign.lhs.dump();
+    assign.rhs.dump();
+    auto insPt = genPrelude(lcvs, isHeap, assign.lhs, assign.rhs, shape);
+    auto valBox = genExprEleValue(assign.rhs, lcvs);
+    auto addrBox = genExprEleAddr(assign.lhs, lcvs);
+    builder->create<fir::StoreOp>(loc, fir::getBase(valBox),
+                                  fir::getBase(addrBox));
+    genPostlude(isHeap, assign.lhs, assign.rhs, insPt);
+    localSymbols.popScope();
   }
 
   /// Shared for both assignments and pointer assignments.
@@ -1487,32 +1515,22 @@ private:
               // be deallocated/reallocated. See Fortran 2018 10.2.1.3 p3
               const bool isHeap =
                   sym && Fortran::semantics::IsAllocatable(*sym);
+              if (isHeap) {
+                TODO("assignment to allocatable not implemented");
+              }
               // Target of the pointer must be assigned. See Fortran
               // 2018 10.2.1.3 p2
               const bool isPointer = sym && Fortran::semantics::IsPointer(*sym);
-              auto lhsType = assign.lhs.GetType();
-              assert(lhsType && "lhs cannot be typeless");
-
               if (assign.lhs.Rank() > 0 || (assign.rhs.Rank() > 0 && isHeap)) {
                 // Array assignment
                 // See Fortran 2018 10.2.1.3 p5, p6, and p7
-                auto shape = getShape(assign.lhs);
-                assert(shape.has_value() && "array without shape");
-                llvm::SmallVector<mlir::Value, 8> lcvs;
-                auto insPt =
-                    genPrelude(lcvs, isHeap, assign.lhs, assign.rhs, *shape);
-                auto valBox = genExprEleValue(assign.rhs, lcvs);
-                auto addrBox = genExprEleAddr(assign.lhs, lcvs);
-                builder->create<fir::StoreOp>(loc, fir::getBase(valBox),
-                                              fir::getBase(addrBox));
-                genPostlude(isHeap, assign.lhs, assign.rhs, insPt);
+                genArrayAssignment(assign, isHeap);
                 return;
               }
 
               // Scalar assignment
-              if (isHeap) {
-                TODO("");
-              }
+              auto lhsType = assign.lhs.GetType();
+              assert(lhsType && "lhs cannot be typeless");
               if (isNumericScalarCategory(lhsType->category())) {
                 // Fortran 2018 10.2.1.3 p8 and p9
                 // Conversions should have been inserted by semantic analysis,

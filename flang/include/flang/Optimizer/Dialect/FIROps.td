@@ -1683,6 +1683,8 @@ def fir_ArrayFetchOp : fir_Op<"array_fetch", [NoSideEffect]> {
       // fetch the value of one of the array value's elements
       %1 = fir.array_fetch %v, %i, %j : (!fir.array<?x?xf32>, index, index) -> f32
     ```
+
+    It is only possible to use `array_fetch` on an `array_load` result value.
   }];
 
   let arguments = (ins
@@ -1702,6 +1704,8 @@ def fir_ArrayFetchOp : fir_Op<"array_fetch", [NoSideEffect]> {
       return emitOpError("number of indices != dimension of array");
     if (element().getType() != arrTy.getEleTy())
       return emitOpError("return type does not match array");
+    if (!isa<fir::ArrayLoadOp>(sequence().getDefiningOp()))
+      return emitOpError("argument #0 must be result of fir.array_load");
     return mlir::success();
   }];
 }
@@ -1804,7 +1808,7 @@ def fir_ArrayMergeStoreOp : fir_Op<"array_merge_store", [
 
   let verifier = [{
     if (!isa<ArrayLoadOp>(original().getDefiningOp()))
-       return emitOpError("operand #0 must be result of a fir.array_load op.");
+       return emitOpError("operand #0 must be result of a fir.array_load op");
     return mlir::success();
   }];
 }

@@ -57,8 +57,8 @@ class SymMap;
 class ExpressionContext {
 public:
   ExpressionContext() = default;
-  ExpressionContext(llvm::ArrayRef<mlir::Value> lcvs)
-      : loopVars{lcvs.begin(), lcvs.end()} {}
+  ExpressionContext(llvm::ArrayRef<mlir::Value> lcvs, bool isLhs)
+      : loopVars{lcvs.begin(), lcvs.end()}, isLhs{isLhs} {}
 
   bool inArrayContext() const { return loopVars.size() > 0; }
   bool inInitializer() const { return isInitializer; }
@@ -67,6 +67,7 @@ public:
 
 private:
   std::vector<mlir::Value> loopVars{};
+  bool isLhs{false};
   bool isInitializer{false};
 };
 
