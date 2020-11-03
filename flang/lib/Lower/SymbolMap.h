@@ -63,6 +63,7 @@ struct SymbolBox : public fir::details::matcher<SymbolBox> {
   // Generalized derived type variable
   using Derived = fir::BoxValue;
 
+  using ExtendedValue = fir::ExtendedValue;
   using VT = std::variant<Intrinsic, FullDim, Char, CharFullDim, Derived, None>;
 
   //===--------------------------------------------------------------------===//
@@ -73,7 +74,7 @@ struct SymbolBox : public fir::details::matcher<SymbolBox> {
   template <typename A>
   SymbolBox(const A &x) : box{x} {}
 
-  operator bool() const { return !std::holds_alternative<None>(box); }
+  explicit operator bool() const { return !std::holds_alternative<None>(box); }
 
   //===--------------------------------------------------------------------===//
   // Accessors

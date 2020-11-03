@@ -1390,71 +1390,6 @@ private:
     genLockStatement(*this, stmt);
   }
 
-  fir::DoLoopOp createLoopNest(llvm::SmallVectorImpl<mlir::Value> &lcvs,
-                               const Fortran::evaluate::Shape &shape) {
-    auto loc = toLocation();
-    auto idxTy = builder->getIndexType();
-    auto zero = builder->createIntegerConstant(loc, idxTy, 0);
-    auto one = builder->createIntegerConstant(loc, idxTy, 1);
-    llvm::SmallVector<mlir::Value, 8> extents;
-
-    for (auto s : shape) {
-      if (s.has_value()) {
-        auto e = Fortran::evaluate::AsGenericExpr(std::move(*s));
-        auto ub = builder->createConvert(loc, idxTy, createFIRExpr(loc, &e));
-        auto up = builder->create<mlir::SubIOp>(loc, ub, one);
-        extents.push_back(up);
-      } else {
-        TODO("");
-      }
-    }
-    // Iteration space is created with outermost columns, innermost rows
-    std::reverse(extents.begin(), extents.end());
-    fir::DoLoopOp inner;
-    auto insPt = builder->saveInsertionPoint();
-    for (auto e : extents) {
-      if (inner)
-        builder->setInsertionPointToStart(inner.getBody());
-      auto loop = builder->create<fir::DoLoopOp>(loc, zero, e, one);
-      lcvs.push_back(loop.getInductionVar());
-      if (!inner)
-        insPt = builder->saveInsertionPoint();
-      inner = loop;
-    }
-    builder->restoreInsertionPoint(insPt);
-    std::reverse(lcvs.begin(), lcvs.end());
-    return inner;
-  }
-
-  mlir::OpBuilder::InsertPoint
-  genPrelude(llvm::SmallVectorImpl<mlir::Value> &lcvs, bool isHeap,
-             const Fortran::lower::SomeExpr &lhs,
-             const Fortran::lower::SomeExpr &rhs,
-             const Fortran::evaluate::Shape &shape) {
-    if (isHeap) {
-      // does this require a dealloc and realloc?
-    }
-    if (/*needToMakeCopies*/ false) {
-      // make copies
-    }
-    // create the loop nest
-    auto innerLoop = createLoopNest(lcvs, shape);
-    assert(innerLoop);
-    auto insPt = builder->saveInsertionPoint();
-    // move insertion point inside loop nest
-    builder->setInsertionPointToStart(innerLoop.getBody());
-    return insPt;
-  }
-
-  void genPostlude(bool isHeap, const Fortran::lower::SomeExpr &lhs,
-                   const Fortran::lower::SomeExpr &rhs,
-                   mlir::OpBuilder::InsertPoint insPt) {
-    builder->restoreInsertionPoint(insPt);
-    if (/*copiesWereMade*/ false) {
-      // free buffers
-    }
-  }
-
   fir::ExtendedValue
   genInitializerExprValue(const Fortran::lower::SomeExpr &expr) {
     Fortran::lower::ExpressionContext context;
@@ -1463,43 +1398,128 @@ private:
                                         context);
   }
 
-  /// Convert the rhs of an array expression to elemental form in context.
-  fir::ExtendedValue genExprEleValue(const Fortran::lower::SomeExpr &expr,
-                                     llvm::ArrayRef<mlir::Value> lcvs) {
-    Fortran::lower::ExpressionContext context(lcvs, /*lhs=*/false);
+  mlir::OpBuilder::InsertPoint
+  genLoopNest(Fortran::lower::ExpressionContext &context, mlir::Value result) {
+    // create the loop nest
+    auto loc = toLocation();
+    auto idxTy = builder->getIndexType();
+    auto zero = builder->createIntegerConstant(loc, idxTy, 0);
+    auto one = builder->createIntegerConstant(loc, idxTy, 1);
+    llvm::SmallVector<mlir::Value, 8> loopUppers;
+
+    // Convert the shape to closed interval form.
+    for (auto s : context.getShape().extents()) {
+      auto ub = builder->createConvert(loc, idxTy, s);
+      auto up = builder->create<mlir::SubIOp>(loc, ub, one);
+      loopUppers.push_back(up);
+    }
+    // Iteration space is created with outermost columns, innermost rows
+    std::reverse(loopUppers.begin(), loopUppers.end());
+    fir::DoLoopOp inner;
+    auto insPt = builder->saveInsertionPoint();
+    const auto loopDepth = loopUppers.size();
+    for (auto i : llvm::enumerate(loopUppers)) {
+      if (i.index() > 0) {
+        assert(inner);
+        builder->setInsertionPointToStart(inner.getBody());
+      }
+      auto loop = builder->create<fir::DoLoopOp>(
+          loc, zero, i.value(), one, /*unordered=*/false,
+          /*finalCount=*/false, mlir::ValueRange{result});
+      result = loop.getRegionIterArgs().front();
+      auto iv = loop.getInductionVar();
+      context.addLoop(iv, result, loop.getResult(0));
+      if (!inner)
+        insPt = builder->saveInsertionPoint();
+      if (i.index() < loopDepth - 1) {
+        // Add the fir.result for all loops except the innermost one.
+        builder->setInsertionPointToStart(loop.getBody());
+        builder->create<fir::ResultOp>(loc, result);
+      }
+      inner = loop;
+    }
+    context.finalizeLoopNest();
+    // move insertion point inside loop nest
+    builder->setInsertionPointToStart(inner.getBody());
+    return insPt;
+  }
+
+  static mlir::Value
+  innerLoopBlockArg(Fortran::lower::ExpressionContext &context) {
+    return context.getArrayBlockArgs().back();
+  }
+  static mlir::Value
+  outerLoopResult(Fortran::lower::ExpressionContext &context) {
+    return context.getLoopReturnVals().front();
+  }
+  mlir::Value genShapeOp(const fir::ExtendedValue &exv) {
+    return Fortran::lower::createShape(toLocation(), *this, exv);
+  }
+
+  fir::ArrayLoadOp genArrayLoad(Fortran::lower::ExpressionContext &context,
+                                const fir::ExtendedValue &exv) {
+    auto loc = toLocation();
+    auto memref = fir::getBase(exv);
+    auto eleTy = fir::dyn_cast_ptrEleTy(memref.getType());
+    assert(eleTy);
+    auto shape = genShapeOp(exv);
+    mlir::Value slice;
+    return builder->create<fir::ArrayLoadOp>(loc, eleTy, memref, shape, slice,
+                                             llvm::None);
+  }
+
+  void mapArrayExpr(Fortran::lower::ExpressionContext &context,
+                    const Fortran::lower::SomeExpr &expr) {
+    assert(context.inPreludePhase());
+    createSomeExtendedExpression(toLocation(), *this, expr, localSymbols,
+                                 context);
+  }
+
+  fir::ExtendedValue
+  genElementalArrayExpr(Fortran::lower::ExpressionContext &context,
+                        const Fortran::lower::SomeExpr &expr) {
+    assert(!context.inPreludePhase());
     return createSomeExtendedExpression(toLocation(), *this, expr, localSymbols,
                                         context);
   }
 
-  /// Convert the lhs of an array assignment to elemental form in the context.
-  fir::ExtendedValue genExprEleAddr(const Fortran::lower::SomeExpr &expr,
-                                    llvm::ArrayRef<mlir::Value> lcvs) {
-    Fortran::lower::ExpressionContext context(lcvs, /*lhs=*/true);
-    return createSomeExtendedAddress(toLocation(), *this, expr, localSymbols,
-                                     context);
-  }
-
   /// Array assignment.
-  /// 1. Evaluate the entire rhs on an element-by-element basis. Apply scalar
-  /// expansion as needed.
-  /// 2. Evaluate the access map expression of the lhs completely.
-  /// 3. Copy the results from (1) to the lhs array per the map (2).
+  /// 1. Evaluate the lhs to determine the rank and how to form the ArrayLoad
+  /// (e.g., if there is a slicing op).
+  /// 2. Scan the rhs, creating the ArrayLoads and evaluate the scalar subparts
+  /// to be added to the map.
+  /// 3. Create the loop nest and evaluate the elemental expression, threading
+  /// the results.
+  /// 4. Copy the resulting array back with ArrayMergeStore to the lhs as
+  /// determined per step 1.
   void genArrayAssignment(const Fortran::evaluate::Assignment &assign,
-                          bool isHeap) {
+                          const Fortran::semantics::Symbol *sym, bool isHeap) {
     auto loc = toLocation();
-    auto optShape = getShape(assign.lhs);
-    assert(optShape.has_value() && "array has no shape");
-    auto shape = *optShape;
+    auto lhsCoorExv = genExprAddr(assign.lhs);
+    if (Fortran::evaluate::IsConstantExpr(assign.rhs)) {
+      // TODO: Constants get expanded out as inline array values. Probably want
+      // to reconsider that based on context. For an initializer, that's fine,
+      // but inlining large arrays in a function is not.
+      auto rhs = fir::getBase(genExprValue(assign.rhs));
+      builder->create<fir::StoreOp>(loc, rhs, fir::getBase(lhsCoorExv));
+      return;
+    }
+    auto shapeOp = genShapeOp(lhsCoorExv);
+    Fortran::lower::ExpressionContext context(shapeOp);
+    auto lhsCoor = fir::getBase(lhsCoorExv);
     localSymbols.pushScope();
-    llvm::SmallVector<mlir::Value, 8> lcvs;
-    assign.lhs.dump();
-    assign.rhs.dump();
-    auto insPt = genPrelude(lcvs, isHeap, assign.lhs, assign.rhs, shape);
-    auto valBox = genExprEleValue(assign.rhs, lcvs);
-    auto addrBox = genExprEleAddr(assign.lhs, lcvs);
-    builder->create<fir::StoreOp>(loc, fir::getBase(valBox),
-                                  fir::getBase(addrBox));
-    genPostlude(isHeap, assign.lhs, assign.rhs, insPt);
+    auto lhsArrayVal = genArrayLoad(context, lhsCoorExv);
+    mapArrayExpr(context, assign.rhs);
+    context.setLoopPhase();
+    auto insPt = genLoopNest(context, lhsArrayVal);
+    auto addrBox = innerLoopBlockArg(context);
+    auto valBox = fir::getBase(genElementalArrayExpr(context, assign.rhs));
+    auto upd = builder->create<fir::ArrayUpdateOp>(
+        loc, addrBox.getType(), addrBox, valBox, context.getLoopCounters());
+    builder->create<fir::ResultOp>(loc, upd.getResult());
+    builder->restoreInsertionPoint(insPt);
+    builder->create<fir::ArrayMergeStoreOp>(loc, lhsArrayVal,
+                                            outerLoopResult(context), lhsCoor);
     localSymbols.popScope();
   }
 
@@ -1521,10 +1541,10 @@ private:
               // Target of the pointer must be assigned. See Fortran
               // 2018 10.2.1.3 p2
               const bool isPointer = sym && Fortran::semantics::IsPointer(*sym);
-              if (assign.lhs.Rank() > 0 || (assign.rhs.Rank() > 0 && isHeap)) {
+              if (assign.lhs.Rank() > 0) {
                 // Array assignment
                 // See Fortran 2018 10.2.1.3 p5, p6, and p7
-                genArrayAssignment(assign, isHeap);
+                genArrayAssignment(assign, sym, isHeap);
                 return;
               }
 

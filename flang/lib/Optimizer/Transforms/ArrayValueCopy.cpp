@@ -212,6 +212,13 @@ void ArrayCopyAnalysis::arrayAccesses(
         appendToQueue(blockArg);
       }
     };
+    auto branchOp = [&](mlir::Block *dest, auto operands) {
+      for (auto i : llvm::enumerate(operands))
+        if (operand->get() == i.value()) {
+          auto blockArg = dest->getArgument(i.index());
+          appendToQueue(blockArg);
+        }
+    };
     // Thread uses into structured loop bodies and return value uses.
     if (auto ro = mlir::dyn_cast<DoLoopOp>(owner)) {
       structuredLoop(ro);
@@ -224,13 +231,25 @@ void ArrayCopyAnalysis::arrayAccesses(
         appendToQueue(ifOp.getResult(operand->getOperandNumber()));
     } else if (mlir::isa<ArrayFetchOp>(owner)) {
       // Keep track of array value fetches.
-      LLVM_DEBUG(llvm::dbgs() << "add " << *owner << " to array value set\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "add fetch {" << *owner << "} to array value set\n");
       accesses.push_back(owner);
     } else if (auto update = mlir::dyn_cast<ArrayUpdateOp>(owner)) {
       // Keep track of array value updates and thread the return value uses.
-      LLVM_DEBUG(llvm::dbgs() << "add " << *owner << " to array value set\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "add update {" << *owner << "} to array value set\n");
       accesses.push_back(owner);
       appendToQueue(update.getResult());
+    } else if (auto br = mlir::dyn_cast<mlir::BranchOp>(owner)) {
+      branchOp(br.getDest(), br.destOperands());
+    } else if (auto br = mlir::dyn_cast<mlir::CondBranchOp>(owner)) {
+      branchOp(br.getTrueDest(), br.getTrueOperands());
+      branchOp(br.getFalseDest(), br.getFalseOperands());
+    } else if (mlir::isa<ArrayMergeStoreOp>(owner)) {
+      // do nothing
+    } else {
+      owner->dump();
+      exit(1);
     }
   }
   loadMapSets.insert({load, visited});
@@ -315,7 +334,10 @@ void ArrayCopyAnalysis::construct(mlir::MutableArrayRef<mlir::Region> regions) {
         } else if (auto load = mlir::dyn_cast<ArrayLoadOp>(op)) {
           llvm::SmallVector<mlir::Operation *, 16> accesses;
           arrayAccesses(accesses, load);
-          for (auto *acc : accesses)
+          LLVM_DEBUG(llvm::dbgs() << "process load: " << load
+                                  << ", accesses: " << accesses.size() << '\n');
+          for (auto *acc : accesses) {
+            LLVM_DEBUG(llvm::dbgs() << " access: " << *acc << '\n');
             if (mlir::isa<ArrayFetchOp, ArrayUpdateOp>(acc)) {
               if (useMap.count(acc)) {
                 mlir::emitError(
@@ -328,6 +350,7 @@ void ArrayCopyAnalysis::construct(mlir::MutableArrayRef<mlir::Region> regions) {
                                       << load << "}\n");
               useMap.insert({acc, &op});
             }
+          }
         }
       }
 }
@@ -398,7 +421,6 @@ public:
       rewriter.create<fir::StoreOp>(update.getLoc(), update.merge(), coor);
 
       auto *storeOp = useMap.lookup(loadOp);
-      auto store = mlir::cast<ArrayMergeStoreOp>(storeOp);
       rewriter.setInsertionPoint(storeOp);
       // TODO: replace store with a copy_out loop, freemem
       mlir::emitError(update.getLoc(), "not yet implemented");
@@ -435,7 +457,7 @@ public:
     auto coor = rewriter.create<ArrayCoorOp>(
         fetch.getLoc(), getEleTy(load.memref().getType()), load.memref(),
         load.shape(), load.slice(), fetch.indices(), load.lenParams());
-    rewriter.replaceOpWithNewOp<fir::LoadOp>(load, coor);
+    rewriter.replaceOpWithNewOp<fir::LoadOp>(fetch, coor);
     return mlir::success();
   }
 
