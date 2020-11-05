@@ -49,6 +49,7 @@ namespace {
 ///
 /// 2. There is either an array_fetch or array_update of a_j with a different
 /// set of index values. [Possible loop-carried dependence.]
+///
 /// If none of the array values overlap in storage and the accesses are not
 /// loop-carried, then the arrays are conflict-free and no copies are required.
 class ArrayCopyAnalysis {
@@ -65,6 +66,9 @@ public:
 
   /// Return true iff the `array_store` has potential conflicts.
   bool hasPotentialConflict(mlir::Operation *op) const {
+    LLVM_DEBUG(llvm::dbgs()
+               << "looking for a conflict on " << *op
+               << " and the set has a total of " << conflicts.size());
     return conflicts.contains(op);
   }
 
@@ -248,8 +252,7 @@ void ArrayCopyAnalysis::arrayAccesses(
     } else if (mlir::isa<ArrayMergeStoreOp>(owner)) {
       // do nothing
     } else {
-      owner->dump();
-      exit(1);
+      llvm::report_fatal_error("array value reached unexpected op");
     }
   }
   loadMapSets.insert({load, visited});
@@ -275,7 +278,11 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
 }
 
 static bool conflictOnMerge(llvm::ArrayRef<mlir::Operation *> accesses) {
+  if (accesses.size() < 2)
+    return false;
   llvm::SmallVector<mlir::Value, 8> indices;
+  LLVM_DEBUG(llvm::dbgs() << "check merge conflict on with " << accesses.size()
+                          << " accesses on the list\n");
   for (auto *op : accesses) {
     llvm::SmallVector<mlir::Value, 8> compareVector;
     if (auto u = mlir::dyn_cast<ArrayUpdateOp>(op)) {
@@ -298,6 +305,7 @@ static bool conflictOnMerge(llvm::ArrayRef<mlir::Operation *> accesses) {
           return std::get<0>(pair) != std::get<1>(pair);
         }))
       return true;
+    LLVM_DEBUG(llvm::dbgs() << "vectors compare equal\n");
   }
   return false;
 }
@@ -324,6 +332,10 @@ void ArrayCopyAnalysis::construct(mlir::MutableArrayRef<mlir::Region> regions) {
           arrayAccesses(accesses,
                         mlir::cast<ArrayLoadOp>(st.original().getDefiningOp()));
           if (conflictDetected(values, accesses, st)) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "CONFLICT: copies required for " << st << '\n'
+                       << "   adding conflicts on: " << op << " and "
+                       << st.original() << '\n');
             conflicts.insert(&op);
             conflicts.insert(st.original().getDefiningOp());
           }
@@ -394,6 +406,10 @@ static mlir::Type getEleTy(mlir::Type ty) {
 }
 
 namespace {
+/// Conversion of fir.array_update Op.
+/// If there is a conflict for the update, then we need to perform a
+/// copy-in/copy-out to preserve the original values of the array. If there is
+/// no conflict, then it is save to eschew making any copies.
 class ArrayUpdateConversion : public mlir::OpRewritePattern<ArrayUpdateOp> {
 public:
   explicit ArrayUpdateConversion(mlir::MLIRContext *ctx,
@@ -407,25 +423,32 @@ public:
     auto *op = update.getOperation();
     auto *loadOp = useMap.lookup(op);
     auto load = mlir::cast<ArrayLoadOp>(loadOp);
-    if (analysis.hasPotentialConflict(op)) {
+    LLVM_DEBUG(llvm::outs() << "does " << load << " have a conflict?\n");
+    if (analysis.hasPotentialConflict(loadOp)) {
+      LLVM_DEBUG(llvm::outs() << "Yes, conflict was found\n");
       rewriter.setInsertionPoint(loadOp);
-      // TODO: replace load with an allocmem, copy_in loop
-      mlir::emitError(update.getLoc(), "not yet implemented");
+      // Copy in.
+      llvm::SmallVector<mlir::Value, 8> extents;
+      getExtents(extents, load.shape().getDefiningOp());
       auto allocmem = rewriter.create<AllocMemOp>(
-          update.getLoc(), dyn_cast_ptrEleTy(load.memref().getType()));
-
+          update.getLoc(), dyn_cast_ptrEleTy(load.memref().getType()),
+          mlir::ValueRange{}, extents);
+      genArrayCopy(load.getLoc(), rewriter, allocmem, load.memref(),
+                   load.shape());
       rewriter.setInsertionPoint(op);
       auto coor = rewriter.create<ArrayCoorOp>(
           update.getLoc(), getEleTy(load.memref().getType()), allocmem,
           load.shape(), load.slice(), update.indices(), load.lenParams());
       rewriter.create<fir::StoreOp>(update.getLoc(), update.merge(), coor);
-
       auto *storeOp = useMap.lookup(loadOp);
       rewriter.setInsertionPoint(storeOp);
-      // TODO: replace store with a copy_out loop, freemem
-      mlir::emitError(update.getLoc(), "not yet implemented");
+      // Copy out.
+      auto store = mlir::cast<ArrayMergeStoreOp>(storeOp);
+      genArrayCopy(store.getLoc(), rewriter, store.memref(), allocmem,
+                   load.shape());
       rewriter.create<FreeMemOp>(update.getLoc(), allocmem);
     } else {
+      LLVM_DEBUG(llvm::outs() << "No, conflict wasn't found\n");
       rewriter.setInsertionPoint(op);
       auto coor = rewriter.create<ArrayCoorOp>(
           update.getLoc(), getEleTy(load.memref().getType()), load.memref(),
@@ -435,6 +458,53 @@ public:
     update.replaceAllUsesWith(load.getResult());
     rewriter.replaceOp(update, load.getResult());
     return mlir::success();
+  }
+
+  static void getExtents(llvm::SmallVectorImpl<mlir::Value> &result,
+                         mlir::Operation *shapeOp) {
+    assert(result.empty());
+    if (auto s = mlir::dyn_cast<fir::ShapeOp>(shapeOp)) {
+      auto e = s.extents();
+      result.insert(result.end(), e.begin(), e.end());
+      return;
+    }
+    if (auto s = mlir::dyn_cast<fir::ShapeShiftOp>(shapeOp)) {
+      s.getExtents(result);
+      return;
+    }
+    llvm::report_fatal_error("not a shape op");
+  }
+
+  void genArrayCopy(mlir::Location loc, mlir::PatternRewriter &rewriter,
+                    mlir::Value dst, mlir::Value src,
+                    mlir::Value shapeOp) const {
+    auto insPt = rewriter.saveInsertionPoint();
+    llvm::SmallVector<mlir::Value, 8> shape;
+    getExtents(shape, shapeOp.getDefiningOp());
+    llvm::SmallVector<mlir::Value, 8> revShape;
+    revShape.insert(revShape.end(), shape.begin(), shape.end());
+    std::reverse(revShape.begin(), revShape.end());
+    llvm::SmallVector<mlir::Value, 8> indices;
+    // Build loop nest from column to row.
+    for (auto sh : revShape) {
+      auto idxTy = rewriter.getIndexType();
+      auto ub = rewriter.create<fir::ConvertOp>(loc, idxTy, sh);
+      auto one = rewriter.create<mlir::ConstantIndexOp>(loc, 1);
+      auto loop = rewriter.create<fir::DoLoopOp>(loc, one, ub, one);
+      rewriter.setInsertionPointToStart(loop.getBody());
+      indices.push_back(loop.getInductionVar());
+    }
+    // Reverse the indices so they are in column-major order.
+    std::reverse(indices.begin(), indices.end());
+    auto ty0 = getEleTy(src.getType());
+    auto fromAddr = rewriter.create<fir::ArrayCoorOp>(
+        loc, ty0, src, shapeOp, mlir::Value{}, indices, mlir::ValueRange{});
+    auto load = rewriter.create<fir::LoadOp>(loc, fromAddr);
+    auto ty1 = getEleTy(dst.getType());
+    auto toAddr = rewriter.create<fir::ArrayCoorOp>(
+        loc, ty1, dst, shapeOp, mlir::Value{}, indices, mlir::ValueRange{});
+    rewriter.create<fir::StoreOp>(loc, load, toAddr);
+    rewriter.restoreInsertionPoint(insPt);
   }
 
 private:
@@ -472,7 +542,7 @@ class ArrayValueCopyConverter
 public:
   void runOnFunction() override {
     auto func = getFunction();
-    LLVM_DEBUG(llvm::dbgs() << "array-value-copy pass on function '"
+    LLVM_DEBUG(llvm::dbgs() << "\n\narray-value-copy pass on function '"
                             << func.getName() << "'\n");
     auto *context = &getContext();
 

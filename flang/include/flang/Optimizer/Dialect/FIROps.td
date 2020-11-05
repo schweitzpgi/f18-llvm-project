@@ -2163,6 +2163,15 @@ def fir_ShapeShiftOp : fir_Op<"shape_shift", [NoSideEffect]> {
       return emitOpError("shape type rank mismatch");
     return mlir::success();
   }];
+
+  let extraClassDeclaration = [{
+    // Logically unzip the extents from the origin values.
+    void getExtents(llvm::SmallVectorImpl<mlir::Value> &result) {
+      for (auto i : llvm::enumerate(pairs()))
+        if (i.index() & 1)
+          result.push_back(i.value());
+    }
+  }];
 }
 
 def fir_SliceOp : fir_Op<"slice", [NoSideEffect]> {
