@@ -24,51 +24,49 @@ namespace {
 class LoopResultRemoval : public mlir::OpRewritePattern<fir::DoLoopOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
+
   LoopResultRemoval(mlir::MLIRContext *c) : OpRewritePattern(c) {}
+
   mlir::LogicalResult
   matchAndRewrite(fir::DoLoopOp loop,
                   mlir::PatternRewriter &rewriter) const override {
-    for (auto r : loop.getResults()) {
-      if (valueUseful(r))
+    LLVM_DEBUG(llvm::dbgs() << "inspecting: " << loop << '\n');
+    if (loop.getNumResults() != 1) {
+      LLVM_DEBUG(llvm::dbgs() << "loop failed: too many results\n");
+      return mlir::failure();
+    }
+    for (auto r : loop.getResults())
+      if (valueUseful(r)) {
+        LLVM_DEBUG(llvm::dbgs() << "loop failed: result used\n");
         return mlir::failure();
-    }
-    auto &loopOps = loop.getBody()->getOperations();
+      }
+    auto loc = loop.getLoc();
     auto newLoop = rewriter.create<fir::DoLoopOp>(
-        loop.getLoc(), loop.lowerBound(), loop.upperBound(), loop.step());
-    rewriter.startRootUpdate(newLoop.getOperation());
-    rewriter.startRootUpdate(loop.getOperation());
-    newLoop.getBody()->getOperations().splice(
-        --newLoop.getBody()->end(), loopOps, loopOps.begin(), --loopOps.end());
-    loop.getInductionVar().replaceAllUsesWith(newLoop.getInductionVar());
-    rewriter.finalizeRootUpdate(loop.getOperation());
-    rewriter.finalizeRootUpdate(newLoop.getOperation());
-    for (auto r : loop.getResults()) {
-      eraseAllUses(r, rewriter);
-    }
-    rewriter.eraseBlock(loop.getBody());
-    rewriter.eraseOp(loop);
+        loc, loop.lowerBound(), loop.upperBound(), loop.step());
+    auto insPt = rewriter.saveInsertionPoint();
+    rewriter.setInsertionPointToStart(newLoop.getBody());
+    mlir::BlockAndValueMapping valueMap;
+    valueMap.map(loop.getInductionVar(), newLoop.getInductionVar());
+    for (auto i = loop.getBody()->begin(), e = std::prev(loop.getBody()->end());
+         i != e; ++i)
+      rewriter.insert(i->clone(valueMap));
+    rewriter.restoreInsertionPoint(insPt);
+    LLVM_DEBUG(llvm::dbgs() << "replacing with: " << newLoop << '\n');
+    rewriter.replaceOpWithNewOp<fir::UndefOp>(loop,
+                                              loop.getResult(0).getType());
     return mlir::success();
   }
 
 private:
-  void eraseAllUses(mlir::Value v, mlir::PatternRewriter &rewriter) const {
-    for (auto &use : v.getUses()) {
-      if (auto convert = dyn_cast<fir::ConvertOp>(use.getOwner())) {
-        eraseAllUses(convert.getResult(), rewriter);
-      }
-      rewriter.eraseOp(use.getOwner());
-    }
-  }
   bool valueUseful(mlir::Value v) const {
     for (auto &use : v.getUses()) {
       if (auto convert = dyn_cast<fir::ConvertOp>(use.getOwner()))
         return valueUseful(convert.getResult());
       if (auto store = dyn_cast<fir::StoreOp>(use.getOwner())) {
         bool anyLoad = false;
-        for (auto &su : store.memref().getUses()) {
+        for (auto &su : store.memref().getUses())
           if (auto load = dyn_cast<fir::LoadOp>(su.getOwner()))
             anyLoad = true;
-        }
         return anyLoad;
       }
       return true;
@@ -83,6 +81,7 @@ public:
   void runOnFunction() override {
     auto *context = &getContext();
     auto function = getFunction();
+    LLVM_DEBUG(llvm::dbgs() << "function: <<<<\n" << function << "\n>>>>\n");
     mlir::OwningRewritePatternList patterns;
     patterns.insert<LoopResultRemoval>(context);
     mlir::ConversionTarget target = *context;
@@ -93,6 +92,8 @@ public:
                                                   std::move(patterns)))) {
       mlir::emitWarning(mlir::UnknownLoc::get(context),
                         "fir loop result optimization failed\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "new-func: <<<<\n" << function << "\n>>>>\n");
     }
   }
 };
