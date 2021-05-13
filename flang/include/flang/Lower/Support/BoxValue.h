@@ -23,6 +23,10 @@
 #include "llvm/Support/raw_ostream.h"
 #include <utility>
 
+namespace Fortran::lower {
+class FirOpBuilder;
+}
+
 namespace fir {
 class CharBoxValue;
 class ArrayBoxValue;
@@ -58,10 +62,12 @@ public:
   AbstractBox() = delete;
   AbstractBox(mlir::Value addr) : addr{addr} {}
 
-  /// FIXME: this comment is not true anymore since genLoad
-  /// is loading constant length characters. What is the impact  /// ?
-  /// An abstract box always contains a memory reference to a value.
-  mlir::Value getAddr() const { return addr; }
+  mlir::Value getAddr() const {
+    // assert(conformsWithPassByRef(addr.getType()) &&
+    // "address is not a conforming type");
+    return addr;
+  }
+  mlir::Type getType() const { return getAddr().getType(); }
 
 protected:
   mlir::Value addr;
@@ -202,12 +208,7 @@ public:
     return fir::dyn_cast_ptrOrBoxEleTy(getBoxTy());
   }
   /// Get the scalar type related to the described entity
-  mlir::Type getEleTy() const {
-    auto type = getBaseTy();
-    if (auto seqTy = type.dyn_cast<fir::SequenceType>())
-      return seqTy.getEleTy();
-    return type;
-  }
+  mlir::Type getEleTy() const { return fir::unwrapSequenceType(getBaseTy()); }
 
   /// Is the entity an array or an assumed rank ?
   bool hasRank() const { return getBaseTy().isa<fir::SequenceType>(); }
@@ -232,10 +233,6 @@ public:
     auto record = getEleTy().dyn_cast<fir::RecordType>();
     return record && record.getNumLenParams() != 0;
   };
-  /// Is this a CLASS(*)/TYPE(*) ?
-  bool isUnlimitedPolymorphic() const {
-    return getEleTy().isa<mlir::NoneType>();
-  }
 };
 
 /// An entity described by a fir.box value that cannot be read into
@@ -369,9 +366,13 @@ class ExtendedValue;
 /// base value or is null.
 mlir::Value getBase(const ExtendedValue &exv);
 
-/// Get the LEN property value of an extended value. CHARACTER values have a LEN
-/// property.
-mlir::Value getLen(const ExtendedValue &exv);
+/// Get the LEN property value of an extended value of type CHARACTER. Works
+/// with CHARACTER values, variables, and boxes.
+mlir::Value getLen(const ExtendedValue &exv,
+                   Fortran::lower::FirOpBuilder &builder);
+
+/// Get the type of the extended value's base value.
+mlir::Type getType(const ExtendedValue &exv);
 
 /// Pretty-print an extended value.
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const ExtendedValue &);

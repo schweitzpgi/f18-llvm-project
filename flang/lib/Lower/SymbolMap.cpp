@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "SymbolMap.h"
+#include "flang/Lower/CharacterExpr.h"
+#include "flang/Lower/FIRBuilder.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/Support/Debug.h"
 
@@ -21,17 +23,41 @@ mlir::Value fir::getBase(const fir::ExtendedValue &exv) {
                    [](const auto &x) { return x.getAddr(); });
 }
 
-mlir::Value fir::getLen(const fir::ExtendedValue &exv) {
+mlir::Value fir::getLen(const fir::ExtendedValue &exv,
+                        Fortran::lower::FirOpBuilder &builder) {
   return exv.match(
-      [](const fir::CharBoxValue &x) { return x.getLen(); },
-      [](const fir::CharArrayBoxValue &x) { return x.getLen(); },
-      [](const fir::BoxValue &) -> mlir::Value {
-        llvm::report_fatal_error("Need to read len from BoxValue Exv");
+      [&](const UnboxedValue &x) {
+        // A value of type fir.char may have a constant length.
+        if (auto charTy = x.getType().dyn_cast<CharacterType>()) {
+          auto loc = x.getLoc();
+          if (charTy.hasConstantLen()) {
+            auto idxTy = builder.getIndexType();
+            return builder.createIntegerConstant(loc, idxTy, charTy.getLen());
+          }
+          fir::emitFatalError(loc, "character value has dynamic length");
+        }
+        return mlir::Value{};
       },
-      [](const fir::MutableBoxValue &) -> mlir::Value {
-        llvm::report_fatal_error("Need to read len from MutableBoxValue Exv");
+      [](const CharBoxValue &x) { return x.getLen(); },
+      [](const CharArrayBoxValue &x) { return x.getLen(); },
+      [&](const BoxValue &x) {
+        auto loc = x.getAddr().getLoc();
+        auto boxValue = builder.create<fir::LoadOp>(loc, x.getAddr());
+        return Fortran::lower::CharacterExprHelper{builder, loc}
+            .readLengthFromBox(boxValue);
+      },
+      [&](const MutableBoxValue &x) {
+        if (x.hasNonDeferredLenParams())
+          return x.nonDeferredLenParams()[0];
+        auto loc = x.getAddr().getLoc();
+        const auto &params = x.getMutableProperties().deferredParams;
+        return builder.create<fir::LoadOp>(loc, params[0]).getResult();
       },
       [](const auto &) { return mlir::Value{}; });
+}
+
+mlir::Type fir::getType(const fir::ExtendedValue &exv) {
+  return exv.match([](const auto &x) { return x.getType(); });
 }
 
 fir::ExtendedValue fir::substBase(const fir::ExtendedValue &exv,
@@ -277,11 +303,12 @@ bool fir::BoxValue::verify() const {
   // Explicit extents are here to cover cases where an explicit-shape dummy
   // argument comes as a fir.box. This can only happen with derived types and
   // unlimited polymorphic.
-  if (!extents.empty() && !(isDerived() || isUnlimitedPolymorphic()))
+  if (!extents.empty() &&
+      !(isDerived() || isUnlimitedPolymorphicType(getBoxTy())))
     return false;
   if (!extents.empty() && extents.size() != rank())
     return false;
-  if (isCharacter() && explicitParams.size() > 1)
+  if (isa_char(getEleTy()) && explicitParams.size() > 1)
     return false;
   return true;
 }

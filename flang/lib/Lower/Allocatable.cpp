@@ -953,11 +953,11 @@ static bool readToBoxValue(const fir::MutableBoxValue &box) {
     return false;
   // Polymorphism might be a source of discontiguity, even on allocatables.
   // Track value as fir.box
-  if (box.isDerived() || box.isUnlimitedPolymorphic())
+  if (box.isDerived() || fir::isUnlimitedPolymorphicType(box.getBoxTy()))
     return true;
   // Intrinsic alloctables are contiguous, no need to track the value by
   // fir.box.
-  if (box.isAllocatable() || box.rank() == 0)
+  if (fir::isAllocatableType(box.getBoxTy()) || box.rank() == 0)
     return false;
   // Pointer are known to be contiguous at compile time iff they have the
   // CONTIGUOUS attribute.

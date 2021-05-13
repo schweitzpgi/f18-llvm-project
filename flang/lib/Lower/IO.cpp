@@ -123,10 +123,6 @@ static constexpr Fortran::lower::FuncTypeBuilderFunc getTypeModel() {
   return std::get<A>(Fortran::lower::newIOTable).getTypeModel();
 }
 
-inline int64_t getLength(mlir::Type argTy) {
-  return argTy.cast<fir::SequenceType>().getShape()[0];
-}
-
 /// Get (or generate) the MLIR FuncOp for a given IO runtime function.
 template <typename E>
 static mlir::FuncOp getIORuntimeFunc(mlir::Location loc,
@@ -159,7 +155,7 @@ static mlir::Value genEndIO(Fortran::lower::AbstractConverter &converter,
             builder.createConvert(loc, getIoMsg.getType().getInput(1),
                                   fir::getBase(ioMsgVar)),
             builder.createConvert(loc, getIoMsg.getType().getInput(2),
-                                  fir::getLen(ioMsgVar))});
+                                  fir::getLen(ioMsgVar, builder))});
   }
   auto endIoStatement = getIORuntimeFunc<mkIOKey(EndIoStatement)>(loc, builder);
   auto call = builder.create<fir::CallOp>(loc, endIoStatement,
@@ -268,7 +264,7 @@ genOutputItemList(Fortran::lower::AbstractConverter &converter,
       outputFuncArgs.push_back(builder.createConvert(
           loc, outputFunc.getType().getInput(1), fir::getBase(exv)));
       outputFuncArgs.push_back(builder.createConvert(
-          loc, outputFunc.getType().getInput(2), fir::getLen(exv)));
+          loc, outputFunc.getType().getInput(2), fir::getLen(exv, builder)));
     } else {
       auto itemBox = converter.genExprValue(expr, stmtCtx, loc);
       auto itemValue = fir::getBase(itemBox);
@@ -348,7 +344,7 @@ static void genInputItemList(Fortran::lower::AbstractConverter &converter,
     if (argType.isa<fir::BoxType>()) {
       // do nothing
     } else if (charHelper.isCharacterScalar(itemTy)) {
-      auto len = fir::getLen(itemBox);
+      auto len = fir::getLen(itemBox, builder);
       inputFuncArgs.push_back(
           builder.createConvert(loc, inputFunc.getType().getInput(2), len));
     } else if (itemTy.isa<mlir::IntegerType>()) {
@@ -1628,7 +1624,8 @@ mlir::Value genInquireSpec<Fortran::parser::InquireSpec::CharVar>(
                   std::get<Fortran::parser::InquireSpec::CharVar::Kind>(var.t))
                   .c_str())),
       builder.createConvert(loc, specFuncTy.getInput(2), fir::getBase(str)),
-      builder.createConvert(loc, specFuncTy.getInput(3), fir::getLen(str))};
+      builder.createConvert(loc, specFuncTy.getInput(3),
+                            fir::getLen(str, builder))};
   return builder.create<fir::CallOp>(loc, specFunc, args).getResult(0);
 }
 /// Specialization for INTEGER.
@@ -1776,7 +1773,8 @@ mlir::Value Fortran::lower::genInquireStatement(
     auto file = converter.genExprAddr(exprPair.first, stmtCtx, loc);
     beginArgs = {
         builder.createConvert(loc, beginFuncTy.getInput(0), fir::getBase(file)),
-        builder.createConvert(loc, beginFuncTy.getInput(1), fir::getLen(file)),
+        builder.createConvert(loc, beginFuncTy.getInput(1),
+                              fir::getLen(file, builder)),
         locToFilename(converter, loc, beginFuncTy.getInput(2)),
         locToLineNo(converter, loc, beginFuncTy.getInput(3))};
   } else {

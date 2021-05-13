@@ -1709,9 +1709,9 @@ IntrinsicLibrary::genIndex(mlir::Type resultType,
   auto kind =
       Fortran::lower::CharacterExprHelper{builder, loc}.getCharacterKind(
           stringBase.getType());
-  auto stringLen = fir::getLen(args[0]);
+  auto stringLen = fir::getLen(args[0], builder);
   auto substringBase = fir::getBase(args[1]);
-  auto substringLen = fir::getLen(args[1]);
+  auto substringLen = fir::getLen(args[1], builder);
   mlir::Value back =
       fir::isUnboxedValue(args[2])
           ? fir::getBase(args[2])
@@ -1919,10 +1919,10 @@ IntrinsicLibrary::genScan(mlir::Type resultType,
             stringBase.getType());
 
     // Get string length argument
-    auto stringLen = fir::getLen(args[0]);
+    auto stringLen = fir::getLen(args[0], builder);
 
     // Get set string length argument
-    auto setLen = fir::getLen(args[1]);
+    auto setLen = fir::getLen(args[1], builder);
 
     // Handle optional back argument
     auto back = isAbsent(args[2])
@@ -1997,8 +1997,8 @@ mlir::Value IntrinsicLibrary::genSign(mlir::Type resultType,
   // TODO: Requirements when second argument is +0./0.
   auto zero = builder.createRealZeroConstant(loc, resultType);
   auto neg = builder.create<fir::NegfOp>(loc, abs);
-  auto cmp =
-      builder.create<mlir::CmpFOp>(loc, mlir::CmpFPredicate::OLT, args[1], zero);
+  auto cmp = builder.create<mlir::CmpFOp>(loc, mlir::CmpFPredicate::OLT,
+                                          args[1], zero);
   return builder.create<mlir::SelectOp>(loc, cmp, neg, abs);
 }
 
@@ -2118,10 +2118,10 @@ IntrinsicLibrary::genVerify(mlir::Type resultType,
             stringBase.getType());
 
     // Get string length argument
-    auto stringLen = fir::getLen(args[0]);
+    auto stringLen = fir::getLen(args[0], builder);
 
     // Get set string length argument
-    auto setLen = fir::getLen(args[1]);
+    auto setLen = fir::getLen(args[1], builder);
 
     // Handle optional back argument
     auto back = isAbsent(args[2])

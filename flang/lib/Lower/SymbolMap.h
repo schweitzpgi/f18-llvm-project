@@ -121,10 +121,12 @@ struct SymbolBox : public fir::details::matcher<SymbolBox> {
     return match([](const Intrinsic &) { return true; },
                  [](const Char &) { return true; },
                  [](const PointerOrAllocatable &x) {
-                   return !x.isDerived() && !x.isUnlimitedPolymorphic();
+                   return !x.isDerived() &&
+                          !fir::isUnlimitedPolymorphicType(x.getBoxTy());
                  },
                  [](const Box &x) {
-                   return !x.isDerived() && !x.isUnlimitedPolymorphic();
+                   return !x.isDerived() &&
+                          !fir::isUnlimitedPolymorphicType(x.getBoxTy());
                  },
                  [](const auto &x) { return false; });
   }

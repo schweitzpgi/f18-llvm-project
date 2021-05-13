@@ -89,8 +89,9 @@ Fortran::lower::genCharCompare(Fortran::lower::FirOpBuilder &builder,
   };
   auto lhsBuffer = allocateIfNotInMemory(fir::getBase(lhs));
   auto rhsBuffer = allocateIfNotInMemory(fir::getBase(rhs));
-  return genRawCharCompare(builder, loc, cmp, lhsBuffer, fir::getLen(lhs),
-                           rhsBuffer, fir::getLen(rhs));
+  return genRawCharCompare(builder, loc, cmp, lhsBuffer,
+                           fir::getLen(lhs, builder), rhsBuffer,
+                           fir::getLen(rhs, builder));
 }
 
 mlir::Value

@@ -1765,7 +1765,7 @@ public:
       } else if (arg.passBy == PassBy::AddressAndLength) {
         auto argRef = genExtAddr(*expr);
         caller.placeAddressAndLengthInput(arg, fir::getBase(argRef),
-                                          fir::getLen(argRef));
+                                          fir::getLen(argRef, builder));
       } else {
         llvm_unreachable("pass by value not handled here");
       }
@@ -1815,9 +1815,9 @@ public:
     if (allocatedResult) {
       if (auto resultArg = caller.getPassedResult()) {
         if (resultArg->passBy == PassBy::AddressAndLength) {
-          caller.placeAddressAndLengthInput(*resultArg,
-                                            fir::getBase(*allocatedResult),
-                                            fir::getLen(*allocatedResult));
+          caller.placeAddressAndLengthInput(
+              *resultArg, fir::getBase(*allocatedResult),
+              fir::getLen(*allocatedResult, builder));
         } else if (resultArg->passBy == PassBy::BaseAddress) {
           caller.placeInput(*resultArg, fir::getBase(*allocatedResult));
         } else {
@@ -3587,7 +3587,7 @@ public:
     auto one = builder.createIntegerConstant(loc, idxTy, 1);
 
     if (fir::isRecordWithAllocatableMember(eleTy))
-       TODO(loc, "deep copy on allocatable members");
+      TODO(loc, "deep copy on allocatable members");
 
     if (!eleSz) {
       // Compute the element size at runtime.
@@ -3596,7 +3596,7 @@ public:
         auto charBytes =
             builder.getKindMap().getCharacterBitsize(charTy.getFKind()) / 8;
         auto bytes = builder.createIntegerConstant(loc, idxTy, charBytes);
-        auto length = fir::getLen(exv);
+        auto length = fir::getLen(exv, builder);
         if (!length)
           fir::emitFatalError(loc, "result is not boxed character");
         eleSz = builder.create<mlir::MulIOp>(loc, bytes, length);
