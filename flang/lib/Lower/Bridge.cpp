@@ -1805,6 +1805,10 @@ private:
                 // Assume lhs is not polymorphic for now given TODO above,
                 // otherwise, the read would is conservative and returns
                 // BoxValue for derived types.
+                // FIXME: Why does this return the value of the lhs variable
+                // instead of a reference, the lhs variable's location? For an
+                // assignment, the value is going to be dead shortly and doesn't
+                // seem useful.
                 return Fortran::lower::genMutableBoxRead(
                            *builder, loc, lhs, /*mayBePolymorphic=*/false)
                     .toExtendedValue();
@@ -1842,6 +1846,51 @@ private:
                 return;
               }
               if (isDerivedCategory(lhsType->category())) {
+                auto lhsTy = fir::getBase(lhs).getType();
+                auto rhsTy = fir::getBase(rhs).getType();
+                if (lhsTy.isa<fir::BoxType>() && rhsTy.isa<fir::BoxType>()) {
+                  // Assign a boxed value to a boxed variable.
+                  // FIXME: Both the lhs and rhs come here as values (not
+                  // references), but we really require references, where the
+                  // variable is in memory.
+                  // XXX: For now, hack around the problem by trying to find the
+                  // addresses by peeking through the value.
+                  if (auto lhsLd = mlir::dyn_cast<fir::LoadOp>(
+                          fir::getBase(lhs).getDefiningOp())) {
+                    // FIXME: should the lhs always be a !box<!ptr<T>>? If so,
+                    // write an assertion here.
+                    builder->create<fir::StoreOp>(loc, fir::getBase(rhs),
+                                                  lhsLd.memref());
+                    return;
+                  }
+                  TODO(loc, "box values that cannot be assigned showed up in "
+                            "an assignment statement");
+                  return;
+                }
+                if (lhsTy.isa<fir::BoxType>()) {
+                  auto boxVal = builder->createBox(loc, rhs);
+                  if (auto lhsLd = mlir::dyn_cast<fir::LoadOp>(
+                          fir::getBase(lhs).getDefiningOp())) {
+                    builder->create<fir::StoreOp>(loc, boxVal, lhsLd.memref());
+                    return;
+                  }
+                  TODO(loc, "box value that cannot be assigned to showed up in "
+                            "an assignment statement");
+                  return;
+                }
+                if (rhsTy.isa<fir::BoxType>()) {
+                  // FIXME: Danger, Will Robinson. Unchecked assumption the RHS
+                  // boxes a variable with the same type.
+                  mlir::Value boxAddr = builder->create<fir::BoxAddrOp>(
+                      loc, fir::getBase(lhs).getType(), fir::getBase(rhs));
+                  genRecordAssignment(lhs, fir::ExtendedValue{boxAddr},
+                                      stmtCtx);
+                  return;
+                }
+
+                // Assign a record value to a record variable. Records are
+                // always objects in memory.
+                //
                 // Fortran 2018 10.2.1.3 p13 and p14
                 // Recursively gen an assignment on each element pair.
                 genRecordAssignment(lhs, rhs, stmtCtx);
