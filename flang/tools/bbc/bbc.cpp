@@ -269,22 +269,8 @@ static mlir::LogicalResult convertFortranSourceToMLIR(
     // run the default canned pipeline
     pm.addPass(std::make_unique<Fortran::lower::VerifierPass>());
 
-    // simplify the IR
-    fir::addCSE(pm);
-    pm.addNestedPass<mlir::FuncOp>(fir::createArrayValueCopyPass());
-    pm.addNestedPass<mlir::FuncOp>(fir::createCharacterConversionPass());
-    pm.addPass(mlir::createCanonicalizerPass());
-    fir::addCSE(pm);
-    pm.addPass(mlir::createInlinerPass());
-    pm.addPass(mlir::createCSEPass());
-
-    // convert control flow to CFG form
-    fir::addCfgConversionPass(pm);
-    pm.addNestedPass<mlir::FuncOp>(fir::createControlFlowLoweringPass());
-    pm.addPass(mlir::createLowerToCFGPass());
-
-    pm.addPass(mlir::createCanonicalizerPass());
-    fir::addCSE(pm);
+    // Add default optimizer pass pipeline.
+    fir::createDefaultFIROptimizerPassPipeline(pm);
   }
 
   if (mlir::succeeded(pm.run(mlirModule))) {
