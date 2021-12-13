@@ -426,6 +426,93 @@ static bool hasPointerType(mlir::Type type) {
   return type.isa<fir::PointerType>();
 }
 
+// This is a NF performance hack. It makes a simple test that the slices of the
+// load, \p ld, and the merge store, \p st, are trivially mutually exclusive.
+static bool mutuallyExclusiveSliceRange(ArrayLoadOp ld, ArrayMergeStoreOp st) {
+  // If the same array_load, then no further testing is warranted.
+  if (ld.getResult() == st.original())
+    return false;
+
+  auto getSliceOp = [](mlir::Value val) -> fir::SliceOp {
+    if (!val)
+      return {};
+    auto sliceOp = mlir::dyn_cast_or_null<fir::SliceOp>(val.getDefiningOp());
+    if (!sliceOp)
+      return {};
+    return sliceOp;
+  };
+
+  auto ldSlice = getSliceOp(ld.slice());
+  auto stSlice = getSliceOp(st.slice());
+  if (!ldSlice || !stSlice)
+    return false;
+
+  // Resign on subobject slices.
+  if (!ldSlice.fields().empty() || !stSlice.fields().empty() ||
+      !ldSlice.substr().empty() || !stSlice.substr().empty())
+    return false;
+
+  // Crudely test that the two slices do not overlap by looking for the
+  // following general condition. If the slices look like (i:j) and (j+1:k) then
+  // these ranges do not overlap. The addend must be a constant.
+  auto ldTrips = ldSlice.triples();
+  auto stTrips = stSlice.triples();
+  const auto size = ldTrips.size();
+  if (size != stTrips.size())
+    return false;
+
+  auto displacedByConstant = [](mlir::Value v1, mlir::Value v2) {
+    auto removeConvert = [](mlir::Value v) -> mlir::Operation * {
+      auto *op = v.getDefiningOp();
+      while (auto conv = mlir::dyn_cast_or_null<fir::ConvertOp>(op))
+        op = conv.value().getDefiningOp();
+      return op;
+    };
+
+    auto isPositiveConstant = [](mlir::Value v) -> bool {
+      if (auto conOp =
+              mlir::dyn_cast<mlir::arith::ConstantOp>(v.getDefiningOp()))
+        if (auto iattr = conOp.value().dyn_cast<mlir::IntegerAttr>())
+          return iattr.getInt() > 0;
+      return false;
+    };
+
+    auto *op1 = removeConvert(v1);
+    auto *op2 = removeConvert(v2);
+    if (!op1 || !op2)
+      return false;
+    if (auto addi = mlir::dyn_cast<mlir::arith::AddIOp>(op2))
+      if ((addi.lhs().getDefiningOp() == op1 &&
+           isPositiveConstant(addi.rhs())) ||
+          (addi.rhs().getDefiningOp() == op1 && isPositiveConstant(addi.lhs())))
+        return true;
+    if (auto subi = mlir::dyn_cast<mlir::arith::SubIOp>(op1))
+      if (subi.lhs().getDefiningOp() == op2 && isPositiveConstant(subi.rhs()))
+        return true;
+    return false;
+  };
+
+  for (std::remove_const_t<decltype(size)> i = 0; i < size; i += 3) {
+    // If identical, skip to the next triple.
+    if (ldTrips[i] == stTrips[i] && ldTrips[i + 1] == stTrips[i + 1] &&
+        ldTrips[i + 2] == stTrips[i + 2])
+      continue;
+    // If both are loop invariant, skip to the next triple.
+    if (mlir::isa_and_nonnull<fir::UndefOp>(ldTrips[i + 1].getDefiningOp()) &&
+        mlir::isa_and_nonnull<fir::UndefOp>(stTrips[i + 1].getDefiningOp()))
+      continue;
+    // If ubound and lbound are the same with a constant offset, skip to the
+    // next triple.
+    if (displacedByConstant(ldTrips[i + 1], stTrips[i]) ||
+        displacedByConstant(stTrips[i + 1], ldTrips[i]))
+      continue;
+    return false;
+  }
+  LLVM_DEBUG(llvm::dbgs() << "detected non-overlapping slice ranges on " << ld
+                          << " and " << st << ", which is not a conflict\n");
+  return true;
+}
+
 /// Is there a conflict between the array value that was updated and to be
 /// stored to `st` and the set of arrays loaded (`reach`) and used to compute
 /// the updated value?
@@ -438,11 +525,15 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
     if (auto ld = mlir::dyn_cast<ArrayLoadOp>(op)) {
       mlir::Type ldTy = ld.memref().getType();
       if (ld.memref() == addr) {
+        if (mutuallyExclusiveSliceRange(ld, st))
+          continue;
         if (ld.getResult() != st.original())
           return true;
-        if (load)
-          // TODO: only return if the loads may overlap (look at slices if any).
+        if (load) {
+          // TODO: extend this to allow checking if the first `load` and this
+          // `ld` are mutually exclusive accesses but not identical.
           return true;
+        }
         load = ld;
       } else if ((hasPointerType(ldTy) || storeHasPointerType)) {
         // TODO: Use target attribute to restrict this case further.
@@ -460,7 +551,9 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
   return false;
 }
 
-/// Is there a conflict on the array being merged into?
+/// Is there an access vector conflict on the array being merged into? If the
+/// access vectors diverge, then assume that there are potentially overlapping
+/// loop-carried references.
 static bool conflictOnMerge(llvm::ArrayRef<mlir::Operation *> mentions) {
   if (mentions.size() < 2)
     return false;
@@ -585,14 +678,14 @@ void ArrayCopyAnalysis::construct(mlir::MutableArrayRef<mlir::Region> regions) {
         if (op.getNumRegions())
           construct(op.getRegions());
         if (auto st = mlir::dyn_cast<ArrayMergeStoreOp>(op)) {
-          llvm::SmallVector<Operation *> values;
+          llvm::SmallVector<mlir::Operation *> values;
           ReachCollector::reachingValues(values, st.sequence());
-          auto callConflict = conservativeCallConflict(values);
-          llvm::SmallVector<Operation *> mentions;
+          bool callConflict = conservativeCallConflict(values);
+          llvm::SmallVector<mlir::Operation *> mentions;
           arrayMentions(mentions,
                         mlir::cast<ArrayLoadOp>(st.original().getDefiningOp()));
-          auto conflict = conflictDetected(values, mentions, st);
-          auto refConflict = conflictOnReference(mentions);
+          bool conflict = conflictDetected(values, mentions, st);
+          bool refConflict = conflictOnReference(mentions);
           if (callConflict || conflict || refConflict) {
             LLVM_DEBUG(llvm::dbgs()
                        << "CONFLICT: copies required for " << st << '\n'
