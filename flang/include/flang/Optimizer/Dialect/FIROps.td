@@ -381,10 +381,15 @@ def fir_CharConvertOp : fir_Op<"char_convert", []> {
     Copy a CHARACTER (must be in memory) of KIND _k1_ to a CHARACTER (also must
     be in memory) of KIND _k2_ where _k1_ != _k2_ and the buffers do not
     overlap. This latter restriction is unchecked, as the Fortran language
-    definition eliminates the overlapping in memory case.
+    definition eliminates the overlapping in memory case. (Supporting the
+    Fortran UNION type extension is TBD for flang.)
 
-    The number of code points copied is specified explicitly as the second
-    argument. The length of the !fir.char type is ignored.
+    The number of code units copied is specified explicitly as the second
+    argument. The length of the !fir.char type on the input and output are
+    ignored.
+
+    Limitation: only ASCII code points are converted in the current
+    implementation.
 
     ```mlir
       fir.char_convert %1 for %2 to %3 : !fir.ref<!fir.char<1,?>>, i32, !fir.ref<!fir.char<2,20>>
@@ -392,9 +397,11 @@ def fir_CharConvertOp : fir_Op<"char_convert", []> {
 
     Should future support for encodings other than ASCII be supported, codegen
     can generate a call to a runtime helper routine which will map the code
-    points from UTF-8 to UCS-2, for example. Such remappings may not always
-    be possible as they may involve the creation of more code points than the
-    `count` limit. These details are left as future to-dos.
+    units from UTF-8 to UCS-2, for example. Such remappings may not always
+    be possible as they may involve the creation of more code units than the
+    `count` limit. For example, one UCS-4 code unit may expand to as many as
+    four UTF-8 code units. The details of non-ASCII code points are left as
+    to-dos.
   }];
 
   let arguments = (ins
