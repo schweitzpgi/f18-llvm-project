@@ -2605,22 +2605,10 @@ public:
                 // free-casting the base address to be a !fir.char reference and
                 // setting the LEN argument to undefined. What could go wrong?
                 auto dataPtr = fir::getBase(x);
-                if (auto boxTy =
-                        dataPtr.getType().template dyn_cast<fir::BoxType>()) {
-                  mlir::Type refTy = boxTy.getEleTy();
-                  if (!fir::isa_ref_type(refTy))
-                    refTy = builder.getRefType(refTy);
-                  dataPtr = builder.create<fir::BoxAddrOp>(loc, refTy, dataPtr);
-                }
-                auto charPtr = builder.createConvert(
-                    loc, builder.getRefType(helper.getCharType(argTy)),
-                    dataPtr);
-                auto charLen = builder.create<fir::UndefOp>(
-                    loc, builder.getCharacterLengthType());
-                auto boxCharTy = fir::BoxCharType::get(
-                    builder.getContext(), helper.getCharacterKind(argTy));
-                return builder.create<fir::EmboxCharOp>(loc, boxCharTy, charPtr,
-                                                        charLen);
+                assert(!dataPtr.getType().template isa<fir::BoxType>());
+                return builder.convertWithSemantics(
+                    loc, argTy, dataPtr,
+                    /*allowCharacterConversion=*/true);
               });
           caller.placeInput(arg, boxChar);
         }
