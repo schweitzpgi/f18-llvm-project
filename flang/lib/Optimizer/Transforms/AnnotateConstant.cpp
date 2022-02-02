@@ -27,7 +27,7 @@ struct AnnotateConstantOperands
         llvm::SmallVector<mlir::Attribute> attrs;
         bool hasOneOrMoreConstOpnd = false;
         for (mlir::Value opnd : op->getOperands()) {
-          if (auto constOp = mlir::dyn_cast<mlir::arith::ConstantOp>(
+          if (auto constOp = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(
                   opnd.getDefiningOp())) {
             attrs.push_back(constOp.value());
             hasOneOrMoreConstOpnd = true;
