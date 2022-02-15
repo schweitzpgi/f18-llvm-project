@@ -915,8 +915,7 @@ bool fir::VectorType::isValidElementType(mlir::Type t) {
   return isa_real(t) || isa_integer(t);
 }
 
-bool fir::isCharacterProcedureTuple(mlir::Type ty,
-                                             bool acceptRawFunc) {
+bool fir::isCharacterProcedureTuple(mlir::Type ty, bool acceptRawFunc) {
   mlir::TupleType tuple = ty.dyn_cast<mlir::TupleType>();
   return tuple && tuple.size() == 2 &&
          (tuple.getType(0).isa<fir::BoxProcType>() ||
