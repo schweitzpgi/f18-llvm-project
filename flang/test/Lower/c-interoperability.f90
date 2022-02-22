@@ -1,4 +1,4 @@
-! RUN: bbc %s | FileCheck %s
+! RUN: bbc %s -o - | FileCheck %s
 
 ! CHECK-LABEL: fir.global @_QMm1Ethis_thing : !fir.type<_QMm1Tthing_with_pointer{cptr:!fir.type<_QM__fortran_builtinsT__builtin_c_ptr{__address:i64}>}> {
 ! CHECK:         %[[VAL_0:.*]] = arith.constant 0 : i64
