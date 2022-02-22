@@ -866,7 +866,7 @@ public:
           assert(fir::isa_ref_type(addr.getType()) &&
                  "expect reference type for address field");
           assert(fir::isa_derived(componentTy) &&
-                 "expect CPTR, C_FUNPTR to be a record");
+                 "expect C_PTR, C_FUNPTR to be a record");
           auto cPtrRecTy = componentTy.cast<fir::RecordType>();
           llvm::StringRef addrFieldName =
               Fortran::lower::builtin::cptrFieldName;
