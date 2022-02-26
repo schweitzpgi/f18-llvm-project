@@ -36,7 +36,13 @@ class BoxprocTypeRewriter : public mlir::TypeConverter {
 public:
   using mlir::TypeConverter::convertType;
 
-  /// Does the type `ty` need to be converted?
+  /// Does the type \p ty need to be converted?
+  /// Any type that is a `!fir.boxproc` in whole or in part will need to be
+  /// converted to a function type to lower the IR to function pointer form in
+  /// the default implementation performed in this pass. Other implementations
+  /// are possible, so those may convert `!fir.boxproc` to some other type or
+  /// not at all depending on the implementation target's characteristics and
+  /// preference.
   bool needsConversion(mlir::Type ty) {
     if (ty.isa<BoxProcType>())
       return true;
