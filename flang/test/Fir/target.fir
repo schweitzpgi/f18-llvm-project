@@ -27,7 +27,7 @@ func @gen4() -> !fir.complex<4> {
   return %6 : !fir.complex<4>
 }
 
-// I32-LABEL: define void @gen8({ double, double }* sret({ double, double }) %
+// I32-LABEL: define void @gen8({ double, double }* sret({ double, double }) align 4 %
 // X64-LABEL: define { double, double } @gen8()
 // AARCH64-LABEL: define { double, double } @gen8()
 // PPC-LABEL: define { double, double } @gen8()
