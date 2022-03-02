@@ -9,7 +9,7 @@ program wsloop
 
 !FIRDialect:  omp.parallel {
         !$OMP PARALLEL
-!FIRDialect:    %[[PRIVATE_INDX:.*]] = fir.alloca i32 {bindc_name = "i", pinned}
+!FIRDialect:    %[[PRIVATE_INDX:.*]] = fir.alloca i32 {bindc_name = "i", pinned
 !FIRDialect:    %[[FINAL_INDX:.*]] = fir.do_loop %[[INDX:.*]] = {{.*}} {
         do i=1, 9
         print*, i
@@ -24,11 +24,11 @@ end
 
 !FIRDialect: func @_QPsub1() {
 subroutine sub1
-!FIRDialect:   {{.*}} = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub1Ei"}
+!FIRDialect:   = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub1Ei"}
   integer :: i
   integer :: arr(10)
 !FIRDialect:   omp.parallel {
-!FIRDialect:     {{.*}} = fir.alloca i32 {bindc_name = "i", pinned}
+!FIRDialect:     = fir.alloca i32 {bindc_name = "i", pinned
   !$OMP PARALLEL
   do i=1, 10
     arr(i) = i
@@ -40,11 +40,11 @@ end subroutine
 
 !FIRDialect: func @_QPsub2() {
 subroutine sub2
-!FIRDialect:   {{.*}} = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub2Ei"}
+!FIRDialect:   = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub2Ei"}
   integer :: i
   integer :: arr(10)
 !FIRDialect:   omp.parallel {
-!FIRDialect:     {{.*}} = fir.alloca i32 {bindc_name = "i", pinned}
+!FIRDialect:     = fir.alloca i32 {bindc_name = "i", pinned
   !$OMP PARALLEL
 !FIRDialect:     omp.master  {
   !$OMP MASTER
@@ -62,12 +62,12 @@ end subroutine
 
 !FIRDialect: func @_QPsub3() {
 subroutine sub3
-!FIRDialect:   {{.*}} = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub3Ei"}
-!FIRDialect:   {{.*}} = fir.alloca i32 {bindc_name = "j", uniq_name = "_QFsub3Ej"}
+!FIRDialect:   = fir.alloca i32 {bindc_name = "i", uniq_name = "_QFsub3Ei"}
+!FIRDialect:   = fir.alloca i32 {bindc_name = "j", uniq_name = "_QFsub3Ej"}
   integer :: i,j
   integer :: arr(10)
 !FIRDialect:   omp.parallel {
-!FIRDialect:     {{.*}} = fir.alloca i32 {bindc_name = "i", pinned}
+!FIRDialect:     = fir.alloca i32 {bindc_name = "i", pinned
   !$OMP PARALLEL
   do i=1, 10
     arr(i) = i
@@ -75,7 +75,7 @@ subroutine sub3
 !FIRDialect:     omp.master  {
   !$OMP MASTER
 !FIRDialect:       omp.parallel {
-!FIRDialect:         {{.*}} = fir.alloca i32 {bindc_name = "j", pinned}
+!FIRDialect:         = fir.alloca i32 {bindc_name = "j", pinned
   !$OMP PARALLEL
   do j=1, 10
     arr(j) = j

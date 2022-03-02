@@ -258,12 +258,19 @@ public:
     localSymbols.addSymbol(target, lookupSymbol(src).toExtendedValue());
   }
 
-  bool bindSymbol(Fortran::lower::SymbolRef sym,
-                  const fir::ExtendedValue &exval) override final {
-    if (lookupSymbol(sym))
+  /// Add the symbol binding to the inner-most level of the symbol map and
+  /// return true if it is not already present. Otherwise, return false.
+  bool bindIfNewSymbol(Fortran::lower::SymbolRef sym,
+                       const fir::ExtendedValue &exval) {
+    if (shallowLookupSymbol(sym))
       return false;
-    localSymbols.addSymbol(sym, exval);
+    bindSymbol(sym, exval);
     return true;
+  }
+
+  void bindSymbol(Fortran::lower::SymbolRef sym,
+                  const fir::ExtendedValue &exval) override final {
+    localSymbols.addSymbol(sym, exval, /*forced=*/true);
   }
 
   bool lookupLabelSet(Fortran::lower::SymbolRef sym,
@@ -346,7 +353,7 @@ public:
     mlir::Location loc = genLocation(sym.name());
     mlir::Type symType = genType(sym);
     const auto *details = sym.detailsIf<Fortran::semantics::HostAssocDetails>();
-    assert(details != nullptr && "No host-association found");
+    assert(details && "No host-association found");
     const Fortran::semantics::Symbol &hsym = details->symbol();
     Fortran::lower::SymbolBox hsb = lookupSymbol(hsym);
 
@@ -391,20 +398,24 @@ public:
           return fir::substBase(hexv, temp);
         });
 
-    return bindSymbol(sym, exv);
+    return bindIfNewSymbol(sym, exv);
   }
 
   void
   copyHostAssociateVar(const Fortran::semantics::Symbol &sym) override final {
-    Fortran::lower::SymbolBox sb = lookupSymbol(sym);
-    fir::ExtendedValue exv = getExtendedValue(sb);
-
-    const auto *details = sym.detailsIf<Fortran::semantics::HostAssocDetails>();
-    assert(details != nullptr && "No host-association found");
-    const Fortran::semantics::Symbol &hsym = details->symbol();
+    // 1) Fetch the original copy of the variable.
+    assert(sym.has<Fortran::semantics::HostAssocDetails>() &&
+           "No host-association found");
+    const Fortran::semantics::Symbol &hsym = sym.GetUltimate();
     Fortran::lower::SymbolBox hsb = lookupSymbol(hsym);
     fir::ExtendedValue hexv = getExtendedValue(hsb);
 
+    // 2) Create a copy that will mask the original.
+    createHostAssociateVarClone(sym);
+    Fortran::lower::SymbolBox sb = lookupSymbol(sym);
+    fir::ExtendedValue exv = getExtendedValue(sb);
+
+    // 3) Perform the assignment.
     mlir::Location loc = genLocation(sym.name());
     mlir::Type symType = genType(sym);
     if (auto seqTy = symType.dyn_cast<fir::SequenceType>()) {
@@ -414,11 +425,11 @@ public:
       stmtCtx.finalize();
     } else if (hexv.getBoxOf<fir::CharBoxValue>()) {
       fir::factory::CharacterExprHelper{*builder, loc}.createAssign(exv, hexv);
-    } else if (hsb.toExtendedValue().getBoxOf<fir::MutableBoxValue>()) {
+    } else if (hexv.getBoxOf<fir::MutableBoxValue>()) {
       TODO(loc, "firstprivatisation of allocatable variables");
     } else {
-      auto loadVal = builder->create<fir::LoadOp>(loc, getSymbolAddress(hsym));
-      builder->create<fir::StoreOp>(loc, loadVal, getSymbolAddress(sym));
+      auto loadVal = builder->create<fir::LoadOp>(loc, fir::getBase(hexv));
+      builder->create<fir::StoreOp>(loc, loadVal, fir::getBase(exv));
     }
   }
 
@@ -492,6 +503,14 @@ private:
     return {};
   }
 
+  /// Find the symbol in the inner-most level of the local map or return null.
+  Fortran::lower::SymbolBox
+  shallowLookupSymbol(const Fortran::semantics::Symbol &sym) {
+    if (Fortran::lower::SymbolBox v = localSymbols.shallowLookupSymbol(sym))
+      return v;
+    return {};
+  }
+
   /// Add the symbol to the local map and return `true`. If the symbol is
   /// already in the map and \p forced is `false`, the map is not updated.
   /// Instead the value `false` is returned.
@@ -525,33 +544,40 @@ private:
   /// Generate the address of loop variable \p sym.
   /// If \p sym is not mapped yet, allocate local storage for it.
   mlir::Value genLoopVariableAddress(mlir::Location loc,
-                                     const Fortran::semantics::Symbol &sym) {
-    if (lookupSymbol(sym)) {
-      Fortran::lower::StatementContext stmtCtx;
-      return fir::getBase(
-          genExprAddr(Fortran::evaluate::AsGenericExpr(sym).value(), stmtCtx));
+                                     const Fortran::semantics::Symbol &sym,
+                                     bool isUnordered) {
+    if (isUnordered || sym.has<Fortran::semantics::HostAssocDetails>() ||
+        sym.has<Fortran::semantics::UseDetails>()) {
+      if (!shallowLookupSymbol(sym)) {
+        // Do concurrent loop variables are not mapped yet since they are local
+        // to the Do concurrent scope (same for OpenMP loops).
+        auto newVal = builder->createTemporary(loc, genType(sym),
+                                               toStringRef(sym.name()));
+        addSymbol(sym, newVal);
+        return newVal;
+      }
     }
-    // Do concurrent loop variables are not mapped yet since they are local to
-    // the Do concurrent scope (same for OpenMP loops).
-    mlir::Value newVal =
-        builder->createTemporary(loc, genType(sym), toStringRef(sym.name()));
-    addSymbol(sym, newVal);
-    return newVal;
+    auto entry = lookupSymbol(sym);
+    (void)entry;
+    assert(entry && "loop control variable must already be in map");
+    Fortran::lower::StatementContext stmtCtx;
+    return fir::getBase(
+        genExprAddr(Fortran::evaluate::AsGenericExpr(sym).value(), stmtCtx));
   }
 
-  bool isNumericScalarCategory(Fortran::common::TypeCategory cat) {
+  static bool isNumericScalarCategory(Fortran::common::TypeCategory cat) {
     return cat == Fortran::common::TypeCategory::Integer ||
            cat == Fortran::common::TypeCategory::Real ||
            cat == Fortran::common::TypeCategory::Complex ||
            cat == Fortran::common::TypeCategory::Logical;
   }
-  bool isLogicalCategory(Fortran::common::TypeCategory cat) {
+  static bool isLogicalCategory(Fortran::common::TypeCategory cat) {
     return cat == Fortran::common::TypeCategory::Logical;
   }
-  bool isCharacterCategory(Fortran::common::TypeCategory cat) {
+  static bool isCharacterCategory(Fortran::common::TypeCategory cat) {
     return cat == Fortran::common::TypeCategory::Character;
   }
-  bool isDerivedCategory(Fortran::common::TypeCategory cat) {
+  static bool isDerivedCategory(Fortran::common::TypeCategory cat) {
     return cat == Fortran::common::TypeCategory::Derived;
   }
 
@@ -877,7 +903,7 @@ private:
          std::get<std::list<Fortran::parser::ConcurrentControl>>(header.t))
       incrementLoopNestInfo.emplace_back(
           *std::get<0>(control.t).symbol, std::get<1>(control.t),
-          std::get<2>(control.t), std::get<3>(control.t), true);
+          std::get<2>(control.t), std::get<3>(control.t), /*isUnordered=*/true);
     IncrementLoopInfo &info = incrementLoopNestInfo.back();
     info.maskExpr = Fortran::semantics::GetExpr(
         std::get<std::optional<Fortran::parser::ScalarLogicalExpr>>(header.t));
@@ -1020,8 +1046,8 @@ private:
         const auto *hostDetails =
             sym->detailsIf<Fortran::semantics::HostAssocDetails>();
         assert(hostDetails && "missing local_init variable host variable");
-        [[maybe_unused]] const Fortran::semantics::Symbol &hostSym =
-            hostDetails->symbol();
+        const Fortran::semantics::Symbol &hostSym = hostDetails->symbol();
+        (void)hostSym;
         TODO(loc, "do concurrent locality specs not implemented");
         // assign sym = hostSym
       }
@@ -1035,7 +1061,8 @@ private:
       }
     };
     for (IncrementLoopInfo &info : incrementLoopNestInfo) {
-      info.loopVariable = genLoopVariableAddress(loc, info.loopVariableSym);
+      info.loopVariable =
+          genLoopVariableAddress(loc, info.loopVariableSym, info.isUnordered);
       mlir::Value lowerValue = genControlValue(info.lowerExpr, info);
       mlir::Value upperValue = genControlValue(info.upperExpr, info);
       info.stepValue = genControlValue(info.stepExpr, info);
@@ -1457,7 +1484,8 @@ private:
 
   void genFIR(const Fortran::parser::OpenMPConstruct &omp) {
     mlir::OpBuilder::InsertPoint insertPt = builder->saveInsertionPoint();
-    localSymbols.pushScope();
+    if (constructDepth++ == 0)
+      localSymbols.pushScope();
     genOpenMPConstruct(*this, getEval(), omp);
 
     const auto *ompLoop =
@@ -1484,7 +1512,8 @@ private:
 
     for (Fortran::lower::pft::Evaluation &e : curEval->getNestedEvaluations())
       genFIR(e);
-    localSymbols.popScope();
+    if (--constructDepth == 0)
+      localSymbols.popScope();
     builder->restoreInsertionPoint(insertPt);
   }
 
@@ -1959,12 +1988,13 @@ private:
            !Fortran::evaluate::HasVectorSubscript(expr);
   }
 
-  [[maybe_unused]] static bool
-  isFuncResultDesignator(const Fortran::lower::SomeExpr &expr) {
+#if !defined(NDEBUG)
+  static bool isFuncResultDesignator(const Fortran::lower::SomeExpr &expr) {
     const Fortran::semantics::Symbol *sym =
         Fortran::evaluate::GetFirstSymbol(expr);
     return sym && sym->IsFuncResult();
   }
+#endif
 
   static bool isWholeAllocatable(const Fortran::lower::SomeExpr &expr) {
     const Fortran::semantics::Symbol *sym =
@@ -2997,6 +3027,8 @@ private:
 
   /// Tuple of host assoicated variables.
   mlir::Value hostAssocTuple;
+
+  std::size_t constructDepth = 0;
 };
 
 } // namespace
