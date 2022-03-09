@@ -491,7 +491,8 @@ static mlir::LogicalResult verify(fir::ArrayFetchOp op) {
   auto ty = validArraySubobject(op);
   if (!ty || ty != ::adjustedElementType(op.getType()))
     return op.emitOpError("return type and/or indices do not type check");
-  if (!llvm::isa_and_nonnull<fir::ArrayLoadOp>(op.getSequence().getDefiningOp()))
+  if (!llvm::isa_and_nonnull<fir::ArrayLoadOp>(
+          op.getSequence().getDefiningOp()))
     return op.emitOpError("argument #0 must be result of fir.array_load");
   return mlir::success();
 }
@@ -601,7 +602,8 @@ static void printCallOp(mlir::OpAsmPrinter &p, fir::CallOp &op) {
   else
     p << op.getOperand(0);
   p << '(' << op->getOperands().drop_front(isDirect ? 0 : 1) << ')';
-  p.printOptionalAttrDict(op->getAttrs(), {fir::CallOp::getCalleeAttrNameStr()});
+  p.printOptionalAttrDict(op->getAttrs(),
+                          {fir::CallOp::getCalleeAttrNameStr()});
   auto resultTypes{op.getResultTypes()};
   llvm::SmallVector<Type> argTypes(
       llvm::drop_begin(op.getOperandTypes(), isDirect ? 0 : 1));
@@ -1952,9 +1954,9 @@ static void print(mlir::OpAsmPrinter &p, fir::DoLoopOp op) {
     p << " -> " << op.getResultTypes();
     printBlockTerminators = true;
   }
-  p.printOptionalAttrDictWithKeyword(op->getAttrs(),
-                                     {fir::DoLoopOp::getUnorderedAttrNameStr(),
-                                      fir::DoLoopOp::getFinalValueAttrNameStr()});
+  p.printOptionalAttrDictWithKeyword(
+      op->getAttrs(), {fir::DoLoopOp::getUnorderedAttrNameStr(),
+                       fir::DoLoopOp::getFinalValueAttrNameStr()});
   p.printRegion(op.getRegion(), /*printEntryBlockArgs=*/false,
                 printBlockTerminators);
 }
@@ -2833,10 +2835,12 @@ static mlir::LogicalResult verify(fir::StoreOp &op) {
 // StringLitOp
 //===----------------------------------------------------------------------===//
 
-bool fir::StringLitOp::isWideValue() {
-  auto eleTy = getType().cast<fir::SequenceType>().getEleTy();
-  return eleTy.cast<fir::CharacterType>().getFKind() != 1;
+inline fir::CharacterType::KindTy stringLitOpGetKind(fir::StringLitOp op) {
+  auto eleTy = op.getType().cast<fir::SequenceType>().getEleTy();
+  return eleTy.cast<fir::CharacterType>().getFKind();
 }
+
+bool fir::StringLitOp::isWideValue() { return stringLitOpGetKind(*this) != 1; }
 
 static mlir::NamedAttribute
 mkNamedIntegerAttr(mlir::OpBuilder &builder, llvm::StringRef name, int64_t v) {
@@ -2912,6 +2916,9 @@ static mlir::ParseResult parseStringLitOp(mlir::OpAsmParser &parser,
   if (auto v = val.dyn_cast<mlir::StringAttr>())
     result.attributes.push_back(
         builder.getNamedAttr(fir::StringLitOp::value(), v));
+  else if (auto v = val.dyn_cast<mlir::DenseElementsAttr>())
+    result.attributes.push_back(
+        builder.getNamedAttr(fir::StringLitOp::xlist(), v));
   else if (auto v = val.dyn_cast<mlir::ArrayAttr>())
     result.attributes.push_back(
         builder.getNamedAttr(fir::StringLitOp::xlist(), v));
@@ -2945,10 +2952,15 @@ static mlir::LogicalResult verify(fir::StringLitOp &op) {
   if (op.getSize().cast<mlir::IntegerAttr>().getValue().isNegative())
     return op.emitOpError("size must be non-negative");
   if (auto xl = op.getOperation()->getAttr(fir::StringLitOp::xlist())) {
-    auto xList = xl.cast<mlir::ArrayAttr>();
-    for (auto a : xList)
-      if (!a.isa<mlir::IntegerAttr>())
-        return op.emitOpError("values in list must be integers");
+    if (auto xList = xl.dyn_cast<mlir::ArrayAttr>()) {
+      for (auto a : xList)
+        if (!a.isa<mlir::IntegerAttr>())
+          return op.emitOpError("values in initializer must be integers");
+    } else if (xl.isa<mlir::DenseElementsAttr>()) {
+      // do nothing
+    } else {
+      return op.emitOpError("has unexpected attribute");
+    }
   }
   return mlir::success();
 }

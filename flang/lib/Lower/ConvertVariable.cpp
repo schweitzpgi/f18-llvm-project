@@ -36,45 +36,6 @@
 
 #define DEBUG_TYPE "flang-lower-variable"
 
-/// Helper to retrieve a copy of a character literal string from a SomeExpr.
-/// Required to build character global initializers.
-template <int KIND>
-static llvm::Optional<std::tuple<std::string, std::size_t>>
-getCharacterLiteralCopy(
-    const Fortran::evaluate::Expr<
-        Fortran::evaluate::Type<Fortran::common::TypeCategory::Character, KIND>>
-        &x) {
-  if (const auto *con =
-          Fortran::evaluate::UnwrapConstantValue<Fortran::evaluate::Type<
-              Fortran::common::TypeCategory::Character, KIND>>(x))
-    if (auto val = con->GetScalarValue())
-      return std::tuple<std::string, std::size_t>{
-          std::string{(const char *)val->c_str(),
-                      KIND * (std::size_t)con->LEN()},
-          (std::size_t)con->LEN()};
-  return llvm::None;
-}
-static llvm::Optional<std::tuple<std::string, std::size_t>>
-getCharacterLiteralCopy(
-    const Fortran::evaluate::Expr<Fortran::evaluate::SomeCharacter> &x) {
-  return std::visit([](const auto &e) { return getCharacterLiteralCopy(e); },
-                    x.u);
-}
-static llvm::Optional<std::tuple<std::string, std::size_t>>
-getCharacterLiteralCopy(const Fortran::lower::SomeExpr &x) {
-  if (const auto *e = Fortran::evaluate::UnwrapExpr<
-          Fortran::evaluate::Expr<Fortran::evaluate::SomeCharacter>>(x))
-    return getCharacterLiteralCopy(*e);
-  return llvm::None;
-}
-template <typename A>
-static llvm::Optional<std::tuple<std::string, std::size_t>>
-getCharacterLiteralCopy(const std::optional<A> &x) {
-  if (x)
-    return getCharacterLiteralCopy(*x);
-  return llvm::None;
-}
-
 /// Helper to lower a scalar expression using a specific symbol mapping.
 static mlir::Value genScalarValue(Fortran::lower::AbstractConverter &converter,
                                   mlir::Location loc,
@@ -382,6 +343,19 @@ createGlobalInitialization(fir::FirOpBuilder &builder, fir::GlobalOp global,
   builder.restoreInsertionPoint(insertPt);
 }
 
+template <int KIND>
+static mlir::DenseElementsAttr genWideCharLit(fir::FirOpBuilder &builder,
+                                              void *ptr, unsigned len) {
+  auto *ctx = builder.getContext();
+  llvm::ArrayRef<std::int64_t> lenVec = {len};
+  using ET = typename Fortran::evaluate::Scalar<Fortran::evaluate::Type<
+      Fortran::common::TypeCategory::Character, KIND>>::value_type;
+  auto ty = mlir::RankedTensorType::get(
+      lenVec, mlir::IntegerType::get(ctx, sizeof(ET) * 8));
+  return mlir::DenseElementsAttr::get(
+      ty, llvm::ArrayRef<ET>{static_cast<const ET *>(ptr), len});
+}
+
 /// Create the global op and its init if it has one
 static fir::GlobalOp defineGlobal(Fortran::lower::AbstractConverter &converter,
                                   const Fortran::lower::pft::Variable &var,
@@ -447,27 +421,16 @@ static fir::GlobalOp defineGlobal(Fortran::lower::AbstractConverter &converter,
   } else if (const auto *details =
                  sym.detailsIf<Fortran::semantics::ObjectEntityDetails>()) {
     if (details->init()) {
-      if (fir::isa_char(symTy)) {
-        // CHARACTER literal
-        if (auto chLit = getCharacterLiteralCopy(details->init().value())) {
-          mlir::StringAttr init =
-              builder.getStringAttr(std::get<std::string>(*chLit));
-          global->setAttr(global.getInitValAttrName(), init);
-        } else {
-          fir::emitFatalError(loc, "CHARACTER has unexpected initial value");
-        }
-      } else {
-        createGlobalInitialization(
-            builder, global, [&](fir::FirOpBuilder &builder) {
-              Fortran::lower::StatementContext stmtCtx(
-                  /*cleanupProhibited=*/true);
-              fir::ExtendedValue initVal = genInitializerExprValue(
-                  converter, loc, details->init().value(), stmtCtx);
-              mlir::Value castTo =
-                  builder.createConvert(loc, symTy, fir::getBase(initVal));
-              builder.create<fir::HasValueOp>(loc, castTo);
-            });
-      }
+      createGlobalInitialization(
+          builder, global, [&](fir::FirOpBuilder &builder) {
+            Fortran::lower::StatementContext stmtCtx(
+                /*cleanupProhibited=*/true);
+            fir::ExtendedValue initVal = genInitializerExprValue(
+                converter, loc, details->init().value(), stmtCtx);
+            mlir::Value castTo =
+                builder.createConvert(loc, symTy, fir::getBase(initVal));
+            builder.create<fir::HasValueOp>(loc, castTo);
+          });
     } else if (hasDefaultInitialization(sym)) {
       createGlobalInitialization(
           builder, global, [&](fir::FirOpBuilder &builder) {

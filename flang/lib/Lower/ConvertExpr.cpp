@@ -1340,23 +1340,7 @@ public:
     inInitializer->rawVals.push_back(val);
   }
 
-  /// Convert a ascii scalar literal CHARACTER to IR. (specialization)
-  ExtValue
-  genAsciiScalarLit(const Fortran::evaluate::Scalar<Fortran::evaluate::Type<
-                        Fortran::common::TypeCategory::Character, 1>> &value,
-                    int64_t len) {
-    assert(value.size() == static_cast<std::uint64_t>(len));
-    // Outline character constant in ro data if it is not in an initializer.
-    if (!inInitializer)
-      return fir::factory::createStringLiteral(builder, getLoc(), value);
-    // When in an initializer context, construct the literal op itself and do
-    // not construct another constant object in rodata.
-    fir::StringLitOp stringLit = builder.createStringLitOp(getLoc(), value);
-    mlir::Value lenp = builder.createIntegerConstant(
-        getLoc(), builder.getCharacterLengthType(), len);
-    return fir::CharBoxValue{stringLit.getResult(), lenp};
-  }
-  /// Convert a non ascii scalar literal CHARACTER to IR. (specialization)
+  /// Convert a scalar literal CHARACTER to IR.
   template <int KIND>
   ExtValue
   genScalarLit(const Fortran::evaluate::Scalar<Fortran::evaluate::Type<
@@ -1364,7 +1348,16 @@ public:
                int64_t len) {
     using ET = typename std::decay_t<decltype(value)>::value_type;
     if constexpr (KIND == 1) {
-      return genAsciiScalarLit(value, len);
+      assert(value.size() == static_cast<std::uint64_t>(len));
+      // Outline character constant in ro data if it is not in an initializer.
+      if (!inInitializer)
+        return fir::factory::createStringLiteral(builder, getLoc(), value);
+      // When in an initializer context, construct the literal op itself and do
+      // not construct another constant object in rodata.
+      fir::StringLitOp stringLit = builder.createStringLitOp(getLoc(), value);
+      mlir::Value lenp = builder.createIntegerConstant(
+          getLoc(), builder.getCharacterLengthType(), len);
+      return fir::CharBoxValue{stringLit.getResult(), lenp};
     }
     fir::CharacterType type =
         fir::CharacterType::get(builder.getContext(), KIND, len);
@@ -1374,10 +1367,10 @@ public:
       mlir::ShapedType shape = mlir::VectorType::get(
           llvm::ArrayRef<std::int64_t>{size},
           mlir::IntegerType::get(builder.getContext(), sizeof(ET) * 8));
-      auto strAttr = mlir::DenseElementsAttr::get(
+      auto denseAttr = mlir::DenseElementsAttr::get(
           shape, llvm::ArrayRef<ET>{value.data(), value.size()});
-      auto valTag = mlir::Identifier::get(fir::StringLitOp::value(), context);
-      mlir::NamedAttribute dataAttr(valTag, strAttr);
+      auto denseTag = mlir::Identifier::get(fir::StringLitOp::xlist(), context);
+      mlir::NamedAttribute dataAttr(denseTag, denseAttr);
       auto sizeTag = mlir::Identifier::get(fir::StringLitOp::size(), context);
       mlir::NamedAttribute sizeAttr(sizeTag, builder.getI64IntegerAttr(len));
       llvm::SmallVector<mlir::NamedAttribute> attrs = {dataAttr, sizeAttr};
@@ -1395,9 +1388,6 @@ public:
     // Otherwise, the string is in a plain old expression so "outline" the value
     // by hashconsing it to a constant literal object.
 
-    // FIXME: For wider char types, lowering ought to use an array of i16 or
-    // i32. But for now, lowering just fakes that the string value is a range of
-    // i8 to get it past the C++ compiler.
     std::string globalName =
         fir::factory::uniqueCGIdent("cl", (const char *)value.c_str());
     fir::GlobalOp global = builder.getNamedGlobal(globalName);
