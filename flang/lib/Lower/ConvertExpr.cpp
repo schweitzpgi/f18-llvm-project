@@ -519,6 +519,21 @@ createBoxProcCharTuple(Fortran::lower::AbstractConverter &converter,
                                                      boxProc, charLen);
 }
 
+// Helper to get the ultimate first symbol. This works around the fact that
+// symbol resolution in the front end doesn't always resolve a symbol to its
+// ultimate symbol but may leave placeholder indirections for use and host
+// associations.
+template <typename A>
+const Fortran::semantics::Symbol &getFirstSym(const A &obj) {
+  return obj.GetFirstSymbol().GetUltimate();
+}
+
+// Helper to get the ultimate last symbol.
+template <typename A>
+const Fortran::semantics::Symbol &getLastSym(const A &obj) {
+  return obj.GetLastSymbol().GetUltimate();
+}
+
 namespace {
 
 /// Lowering of Fortran::evaluate::Expr<T> expressions
@@ -979,7 +994,7 @@ public:
   }
 
   ExtValue genval(const Fortran::evaluate::DescriptorInquiry &desc) {
-    ExtValue exv = desc.base().IsSymbol() ? gen(desc.base().GetLastSymbol())
+    ExtValue exv = desc.base().IsSymbol() ? gen(getLastSym(desc.base()))
                                           : gen(desc.base().GetComponent());
     mlir::IndexType idxTy = builder.getIndexType();
     mlir::Location loc = getLoc();
@@ -1649,13 +1664,12 @@ public:
   static Fortran::evaluate::DataRef const *
   reverseComponents(const Fortran::evaluate::Component &cmpt,
                     std::list<const Fortran::evaluate::Component *> &list) {
-    if (!cmpt.GetLastSymbol().test(
-            Fortran::semantics::Symbol::Flag::ParentComp))
+    if (!getLastSym(cmpt).test(Fortran::semantics::Symbol::Flag::ParentComp))
       list.push_front(&cmpt);
     return std::visit(
         Fortran::common::visitors{
             [&](const Fortran::evaluate::Component &x) {
-              if (Fortran::semantics::IsAllocatableOrPointer(x.GetLastSymbol()))
+              if (Fortran::semantics::IsAllocatableOrPointer(getLastSym(x)))
                 return &cmpt.base();
               return reverseComponents(x, list);
             },
@@ -1676,7 +1690,7 @@ public:
     // FIXME: need to thread the LEN type parameters here.
     for (const Fortran::evaluate::Component *field : list) {
       auto recTy = ty.cast<fir::RecordType>();
-      const Fortran::semantics::Symbol &sym = field->GetLastSymbol();
+      const Fortran::semantics::Symbol &sym = getLastSym(*field);
       llvm::StringRef name = toStringRef(sym.name());
       coorArgs.push_back(builder.create<fir::FieldIndexOp>(
           loc, fldTy, name, recTy, fir::getTypeParams(obj)));
@@ -1893,7 +1907,7 @@ public:
 
   /// Return the coordinate of the array reference.
   ExtValue gen(const Fortran::evaluate::ArrayRef &aref) {
-    ExtValue base = aref.base().IsSymbol() ? gen(aref.base().GetFirstSymbol())
+    ExtValue base = aref.base().IsSymbol() ? gen(getFirstSym(aref.base()))
                                            : gen(aref.base().GetComponent());
     // Check for command-line override to use array_coor op.
     if (generateArrayCoordinate)
@@ -3735,7 +3749,7 @@ private:
       if (genShapeFromDataRef(x.base()))
         return true;
     // x has rank and x.base did not produce a shape.
-    ExtValue exv = x.base().IsSymbol() ? asScalarRef(x.base().GetFirstSymbol())
+    ExtValue exv = x.base().IsSymbol() ? asScalarRef(getFirstSym(x.base()))
                                        : asScalarRef(x.base().GetComponent());
     mlir::Location loc = getLoc();
     mlir::IndexType idxTy = builder.getIndexType();
@@ -3770,7 +3784,7 @@ private:
   }
   bool genShapeFromDataRef(const Fortran::evaluate::NamedEntity &x) {
     if (x.IsSymbol())
-      return genShapeFromDataRef(x.GetFirstSymbol());
+      return genShapeFromDataRef(getFirstSym(x));
     return genShapeFromDataRef(x.GetComponent());
   }
   bool genShapeFromDataRef(const Fortran::evaluate::DataRef &x) {
@@ -5103,7 +5117,7 @@ private:
   template <typename A>
   ExtValue genArrayBase(const A &base) {
     ScalarExprLowering sel{getLoc(), converter, symMap, stmtCtx};
-    return base.IsSymbol() ? sel.gen(base.GetFirstSymbol())
+    return base.IsSymbol() ? sel.gen(getFirstSym(base))
                            : sel.gen(base.GetComponent());
   }
 
@@ -6407,7 +6421,7 @@ private:
               },
               [&](const Fortran::evaluate::Component *x) {
                 auto fieldTy = fir::FieldType::get(builder.getContext());
-                llvm::StringRef name = toStringRef(x->GetLastSymbol().name());
+                llvm::StringRef name = toStringRef(getLastSym(*x).name());
                 auto recTy = ty.cast<fir::RecordType>();
                 ty = recTy.getType(name);
                 auto fld = builder.create<fir::FieldIndexOp>(
@@ -6541,7 +6555,7 @@ private:
   CC genImplicitArrayAccess(const Fortran::evaluate::NamedEntity &x,
                             ComponentPath &components) {
     if (x.IsSymbol())
-      return genImplicitArrayAccess(x.GetFirstSymbol(), components);
+      return genImplicitArrayAccess(getFirstSym(x), components);
     return genImplicitArrayAccess(x.GetComponent(), components);
   }
 
@@ -6602,7 +6616,7 @@ private:
         return genImplicitArrayAccess(x, components);
     }
     bool atEnd = pathIsEmpty(components);
-    if (!x.GetLastSymbol().test(Fortran::semantics::Symbol::Flag::ParentComp))
+    if (!getLastSym(x).test(Fortran::semantics::Symbol::Flag::ParentComp))
       // Skip parent components; their components are placed directly in the
       // object.
       components.reversePath.push_back(&x);
@@ -6661,7 +6675,7 @@ private:
 
   CC genarr(const Fortran::evaluate::NamedEntity &x,
             ComponentPath &components) {
-    return x.IsSymbol() ? genarr(x.GetFirstSymbol(), components)
+    return x.IsSymbol() ? genarr(getFirstSym(x), components)
                         : genarr(x.GetComponent(), components);
   }
 
@@ -7020,8 +7034,8 @@ genArrayLoad(mlir::Location loc, Fortran::lower::AbstractConverter &converter,
              Fortran::lower::SymMap &symMap,
              Fortran::lower::StatementContext &stmtCtx) {
   if (x->base().IsSymbol())
-    return genArrayLoad(loc, converter, builder, &x->base().GetLastSymbol(),
-                        symMap, stmtCtx);
+    return genArrayLoad(loc, converter, builder, &getLastSym(x->base()), symMap,
+                        stmtCtx);
   return genArrayLoad(loc, converter, builder, &x->base().GetComponent(),
                       symMap, stmtCtx);
 }

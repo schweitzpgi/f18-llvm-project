@@ -76,11 +76,9 @@ public:
   /// Copy the binding of src to target symbol.
   virtual void copySymbolBinding(SymbolRef src, SymbolRef target) = 0;
 
-  /// Binds the symbol to an fir extended value and returns true if the symbol
-  /// has no existing binding. If there is an existing binding this function
-  /// does nothing and returns false.
-  virtual bool bindSymbol(const SymbolRef sym,
-                          const fir::ExtendedValue &exval) = 0;
+  /// Binds the symbol to an fir extended value. The symbol binding will be
+  /// added or replaced at the inner-most level of the local symbol map.
+  virtual void bindSymbol(SymbolRef sym, const fir::ExtendedValue &exval) = 0;
 
   /// Get the label set associated with a symbol.
   virtual bool lookupLabelSet(SymbolRef sym, pft::LabelSet &labelSet) = 0;

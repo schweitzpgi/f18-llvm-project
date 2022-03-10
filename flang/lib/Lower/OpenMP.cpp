@@ -50,14 +50,12 @@ static void createPrivateVarSyms(Fortran::lower::AbstractConverter &converter,
 
     // Privatization for symbols which are pre-determined (like loop index
     // variables) happen separately, for everything else privatize here
-    if (!sym->test(Fortran::semantics::Symbol::Flag::OmpPreDetermined)) {
-      [[maybe_unused]] bool success =
-          converter.createHostAssociateVarClone(*sym);
+    if constexpr (std::is_same_v<T, Fortran::parser::OmpClause::Firstprivate>) {
+      converter.copyHostAssociateVar(*sym);
+    } else {
+      bool success = converter.createHostAssociateVarClone(*sym);
+      (void)success;
       assert(success && "Privatization failed due to existing binding");
-      constexpr bool init =
-          std::is_same_v<T, Fortran::parser::OmpClause::Firstprivate>;
-      if (init)
-        converter.copyHostAssociateVar(*sym);
     }
   }
 }
@@ -82,7 +80,7 @@ static void privatizeVars(Fortran::lower::AbstractConverter &converter,
 
 static void genObjectList(const Fortran::parser::OmpObjectList &objectList,
                           Fortran::lower::AbstractConverter &converter,
-                          SmallVectorImpl<Value> &operands) {
+                          llvm::SmallVectorImpl<Value> &operands) {
   auto addOperands = [&](Fortran::lower::SymbolRef sym) {
     const mlir::Value variable = converter.getSymbolAddress(sym);
     if (variable) {
@@ -122,7 +120,8 @@ void createEmptyRegionBlocks(
         eval.block->erase();
         eval.block = firOpBuilder.createBlock(region);
       } else {
-        [[maybe_unused]] mlir::Operation &terminatorOp = eval.block->back();
+        mlir::Operation &terminatorOp = eval.block->back();
+        (void)terminatorOp;
         assert((mlir::isa<mlir::omp::TerminatorOp>(terminatorOp) ||
                 mlir::isa<mlir::omp::YieldOp>(terminatorOp)) &&
                "expected terminator op");
@@ -161,12 +160,12 @@ static mlir::Type getLoopVarType(Fortran::lower::AbstractConverter &converter,
 }
 
 template <typename Op>
-static void
-createBodyOfOp(Op &op, Fortran::lower::AbstractConverter &converter,
-               mlir::Location &loc, Fortran::lower::pft::Evaluation &eval,
-               const Fortran::parser::OmpClauseList *clauses = nullptr,
-               const SmallVector<const Fortran::semantics::Symbol *> &args = {},
-               bool outerCombined = false) {
+static void createBodyOfOp(
+    Op &op, Fortran::lower::AbstractConverter &converter, mlir::Location &loc,
+    Fortran::lower::pft::Evaluation &eval,
+    const Fortran::parser::OmpClauseList *clauses = nullptr,
+    const llvm::SmallVector<const Fortran::semantics::Symbol *> &args = {},
+    bool outerCombined = false) {
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
   // If an argument for the region is provided then create the block with that
   // argument. Also update the symbol's address with the mlir argument value.
@@ -178,8 +177,8 @@ createBodyOfOp(Op &op, Fortran::lower::AbstractConverter &converter,
     for (const Fortran::semantics::Symbol *arg : args)
       loopVarTypeSize = std::max(loopVarTypeSize, arg->GetUltimate().size());
     mlir::Type loopVarType = getLoopVarType(converter, loopVarTypeSize);
-    SmallVector<Type> tiv;
-    for (int i = 0; i < (int)args.size(); i++)
+    llvm::SmallVector<Type> tiv;
+    for (std::size_t i = 0; i < args.size(); i++)
       tiv.push_back(loopVarType);
     firOpBuilder.createBlock(&op.getRegion(), {}, tiv);
     int argIndex = 0;
@@ -193,9 +192,8 @@ createBodyOfOp(Op &op, Fortran::lower::AbstractConverter &converter,
           llvm::ArrayRef<mlir::NamedAttribute>{
               Fortran::lower::getAdaptToByRefAttr(firOpBuilder)});
       storeOp = firOpBuilder.create<fir::StoreOp>(loc, val, temp);
-      [[maybe_unused]] bool success = converter.bindSymbol(*arg, temp);
-      assert(success && "Existing binding prevents setting MLIR value for the "
-                        "index variable");
+      // Always add the binding to the inner-most level of the symbol map.
+      converter.bindSymbol(*arg, temp);
       argIndex++;
     }
   } else {
@@ -275,7 +273,7 @@ genOMP(Fortran::lower::AbstractConverter &converter,
             genOMP(converter, eval, simpleStandaloneConstruct);
           },
           [&](const Fortran::parser::OpenMPFlushConstruct &flushConstruct) {
-            SmallVector<Value, 4> operandRange;
+            llvm::SmallVector<Value, 4> operandRange;
             if (const auto &ompObjectList =
                     std::get<std::optional<Fortran::parser::OmpObjectList>>(
                         flushConstruct.t))
@@ -308,7 +306,7 @@ static void createParallelOp(Fortran::lower::AbstractConverter &converter,
   Fortran::lower::StatementContext stmtCtx;
   llvm::ArrayRef<mlir::Type> argTy;
   mlir::Value ifClauseOperand, numThreadsClauseOperand;
-  SmallVector<Value, 4> privateClauseOperands, firstprivateClauseOperands,
+  llvm::SmallVector<Value, 4> privateClauseOperands, firstprivateClauseOperands,
       sharedClauseOperands, copyinClauseOperands, allocatorOperands,
       allocateOperands;
   Attribute defaultClauseOperand, procBindClauseOperand;
@@ -533,9 +531,9 @@ static void genOMP(Fortran::lower::AbstractConverter &converter,
 
   fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();
   mlir::Location currentLocation = converter.getCurrentLocation();
-  SmallVector<Value, 4> lowerBound, upperBound, step, privateClauseOperands,
-      firstPrivateClauseOperands, lastPrivateClauseOperands, linearVars,
-      linearStepVars, reductionVars;
+  llvm::SmallVector<Value, 4> lowerBound, upperBound, step,
+      privateClauseOperands, firstPrivateClauseOperands,
+      lastPrivateClauseOperands, linearVars, linearStepVars, reductionVars;
   mlir::Value scheduleChunkClauseOperand;
   mlir::Attribute scheduleClauseOperand, collapseClauseOperand,
       noWaitClauseOperand, orderedClauseOperand, orderClauseOperand;
@@ -580,7 +578,7 @@ static void genOMP(Fortran::lower::AbstractConverter &converter,
   std::int64_t collapseValue =
       Fortran::lower::getCollapseValue(wsLoopOpClauseList);
   std::size_t loopVarTypeSize = 0;
-  SmallVector<const Fortran::semantics::Symbol *> iv;
+  llvm::SmallVector<const Fortran::semantics::Symbol *> iv;
   do {
     Fortran::lower::pft::Evaluation *doLoop =
         &doConstructEval->getFirstNestedEvaluation();
