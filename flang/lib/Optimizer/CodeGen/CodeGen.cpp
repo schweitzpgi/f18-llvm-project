@@ -1206,8 +1206,9 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
         return {len, typeCodeVal};
       auto i64Ty = mlir::IntegerType::get(&this->lowerTy().getContext(), 64);
       auto byteWidth = genConstantIndex(loc, i64Ty, rewriter, bitWidth / 8);
+      auto len64 = FIROpConversion<OP>::integerCast(loc, rewriter, i64Ty, len);
       auto size =
-          rewriter.create<mlir::LLVM::MulOp>(loc, i64Ty, byteWidth, len);
+          rewriter.create<mlir::LLVM::MulOp>(loc, i64Ty, byteWidth, len64);
       return {size, typeCodeVal};
     };
     auto getKindMap = [&]() -> fir::KindMapping & {
