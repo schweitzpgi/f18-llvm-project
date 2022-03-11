@@ -1364,7 +1364,7 @@ public:
     auto consLit = [&]() -> fir::StringLitOp {
       mlir::MLIRContext *context = builder.getContext();
       std::int64_t size = static_cast<std::int64_t>(value.size());
-      mlir::ShapedType shape = mlir::VectorType::get(
+      mlir::ShapedType shape = mlir::RankedTensorType::get(
           llvm::ArrayRef<std::int64_t>{size},
           mlir::IntegerType::get(builder.getContext(), sizeof(ET) * 8));
       auto denseAttr = mlir::DenseElementsAttr::get(

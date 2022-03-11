@@ -626,17 +626,7 @@ struct StringLitOpConversion : public FIROpConversion<fir::StringLitOp> {
       auto loc = constop.getLoc();
       mlir::Value cst = rewriter.create<mlir::LLVM::UndefOp>(loc, ty);
       if (auto arr = attr.dyn_cast<mlir::DenseElementsAttr>()) {
-        for (auto a : llvm::enumerate(arr.getValues<llvm::APInt>())) {
-          // convert each character to a precise bitsize
-          auto elemAttr =
-              mlir::IntegerAttr::get(intTy, a.value().zextOrTrunc(bits));
-          auto elemCst =
-              rewriter.create<mlir::LLVM::ConstantOp>(loc, intTy, elemAttr);
-          auto index = mlir::ArrayAttr::get(
-              constop.getContext(), rewriter.getI32IntegerAttr(a.index()));
-          cst = rewriter.create<mlir::LLVM::InsertValueOp>(loc, ty, cst,
-                                                           elemCst, index);
-        }
+        cst = rewriter.create<mlir::LLVM::ConstantOp>(loc, ty, arr);
       } else if (auto arr = attr.dyn_cast<mlir::ArrayAttr>()) {
         for (auto a : llvm::enumerate(arr.getValue())) {
           // convert each character to a precise bitsize
@@ -650,6 +640,8 @@ struct StringLitOpConversion : public FIROpConversion<fir::StringLitOp> {
           cst = rewriter.create<mlir::LLVM::InsertValueOp>(loc, ty, cst,
                                                            elemCst, index);
         }
+      } else {
+        return failure("invalid attribute in string literal");
       }
       rewriter.replaceOp(constop, cst);
     }

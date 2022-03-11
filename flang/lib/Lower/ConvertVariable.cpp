@@ -343,19 +343,6 @@ createGlobalInitialization(fir::FirOpBuilder &builder, fir::GlobalOp global,
   builder.restoreInsertionPoint(insertPt);
 }
 
-template <int KIND>
-static mlir::DenseElementsAttr genWideCharLit(fir::FirOpBuilder &builder,
-                                              void *ptr, unsigned len) {
-  auto *ctx = builder.getContext();
-  llvm::ArrayRef<std::int64_t> lenVec = {len};
-  using ET = typename Fortran::evaluate::Scalar<Fortran::evaluate::Type<
-      Fortran::common::TypeCategory::Character, KIND>>::value_type;
-  auto ty = mlir::RankedTensorType::get(
-      lenVec, mlir::IntegerType::get(ctx, sizeof(ET) * 8));
-  return mlir::DenseElementsAttr::get(
-      ty, llvm::ArrayRef<ET>{static_cast<const ET *>(ptr), len});
-}
-
 /// Create the global op and its init if it has one
 static fir::GlobalOp defineGlobal(Fortran::lower::AbstractConverter &converter,
                                   const Fortran::lower::pft::Variable &var,
