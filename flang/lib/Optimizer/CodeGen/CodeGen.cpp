@@ -641,7 +641,7 @@ struct StringLitOpConversion : public FIROpConversion<fir::StringLitOp> {
                                                            elemCst, index);
         }
       } else {
-        return failure("invalid attribute in string literal");
+        return failure();
       }
       rewriter.replaceOp(constop, cst);
     }
