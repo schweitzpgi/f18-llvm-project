@@ -620,31 +620,28 @@ struct StringLitOpConversion : public FIROpConversion<fir::StringLitOp> {
     if (attr.isa<mlir::StringAttr>()) {
       rewriter.replaceOpWithNewOp<mlir::LLVM::ConstantOp>(constop, ty, attr);
     } else {
-      // FIXME: As of llvm head 85bf221f204eafc1142a064f1650ffa9d9e03dad, using
-      // a dense elements attr causes llvm ir verification error:
-      //   %0 = llvm.mlir.constant(dense<[234, 456]> : vector<2xi16>) :
-      //   !llvm.array<2 x i16> creates a vector type constant instead of an
-      //   array, later conflicting with its usage. It is likely an MLIR bug
-      //   that should be investigated. In the meantime, do a dumb chain of
-      //   inserts.
-      auto arr = attr.cast<mlir::ArrayAttr>();
       auto charTy = constop.getType().cast<fir::CharacterType>();
       auto bits = lowerTy().characterBitsize(charTy);
       auto intTy = rewriter.getIntegerType(bits);
       auto loc = constop.getLoc();
-
       mlir::Value cst = rewriter.create<mlir::LLVM::UndefOp>(loc, ty);
-      for (auto a : llvm::enumerate(arr.getValue())) {
-        // convert each character to a precise bitsize
-        auto elemAttr = mlir::IntegerAttr::get(
-            intTy,
-            a.value().cast<mlir::IntegerAttr>().getValue().sextOrTrunc(bits));
-        auto elemCst =
-            rewriter.create<mlir::LLVM::ConstantOp>(loc, intTy, elemAttr);
-        auto index = mlir::ArrayAttr::get(
-            constop.getContext(), rewriter.getI32IntegerAttr(a.index()));
-        cst = rewriter.create<mlir::LLVM::InsertValueOp>(loc, ty, cst, elemCst,
-                                                         index);
+      if (auto arr = attr.dyn_cast<mlir::DenseElementsAttr>()) {
+        cst = rewriter.create<mlir::LLVM::ConstantOp>(loc, ty, arr);
+      } else if (auto arr = attr.dyn_cast<mlir::ArrayAttr>()) {
+        for (auto a : llvm::enumerate(arr.getValue())) {
+          // convert each character to a precise bitsize
+          auto elemAttr = mlir::IntegerAttr::get(
+              intTy,
+              a.value().cast<mlir::IntegerAttr>().getValue().zextOrTrunc(bits));
+          auto elemCst =
+              rewriter.create<mlir::LLVM::ConstantOp>(loc, intTy, elemAttr);
+          auto index = mlir::ArrayAttr::get(
+              constop.getContext(), rewriter.getI32IntegerAttr(a.index()));
+          cst = rewriter.create<mlir::LLVM::InsertValueOp>(loc, ty, cst,
+                                                           elemCst, index);
+        }
+      } else {
+        return failure("invalid attribute in string literal");
       }
       rewriter.replaceOp(constop, cst);
     }
@@ -1198,14 +1195,14 @@ struct EmboxCommonConversion : public FIROpConversion<OP> {
               this->genConstantOffset(loc, rewriter, typeCode)};
     };
     auto doCharacter =
-        [&](unsigned width,
+        [&](unsigned bitWidth,
             mlir::Value len) -> std::tuple<mlir::Value, mlir::Value> {
-      auto typeCode = fir::characterBitsToTypeCode(width);
+      auto typeCode = fir::characterBitsToTypeCode(bitWidth);
       auto typeCodeVal = this->genConstantOffset(loc, rewriter, typeCode);
-      if (width == 8)
+      if (bitWidth == 8)
         return {len, typeCodeVal};
-      auto byteWidth = this->genConstantOffset(loc, rewriter, width / 8);
       auto i64Ty = mlir::IntegerType::get(&this->lowerTy().getContext(), 64);
+      auto byteWidth = genConstantIndex(loc, i64Ty, rewriter, bitWidth / 8);
       auto size =
           rewriter.create<mlir::LLVM::MulOp>(loc, i64Ty, byteWidth, len);
       return {size, typeCodeVal};
@@ -2605,17 +2602,17 @@ struct GlobalOpConversion : public FIROpConversion<fir::GlobalOp> {
   mlir::LogicalResult
   matchAndRewrite(fir::GlobalOp global, OperandTy operands,
                   mlir::ConversionPatternRewriter &rewriter) const override {
-    auto tyAttr = convertType(global.getType());
+    auto objTy = convertType(global.getType());
     if (global.getType().isa<fir::BoxType>())
-      tyAttr = tyAttr.cast<mlir::LLVM::LLVMPointerType>().getElementType();
+      objTy = objTy.cast<mlir::LLVM::LLVMPointerType>().getElementType();
     auto loc = global.getLoc();
-    mlir::Attribute initAttr{};
+    mlir::Attribute initAttr;
     if (global.initVal())
       initAttr = global.initVal().getValue();
     auto linkage = convertLinkage(global.linkName());
     auto isConst = global.constant().hasValue();
-    auto g = rewriter.create<mlir::LLVM::GlobalOp>(
-        loc, tyAttr, isConst, linkage, global.sym_name(), initAttr);
+    auto g = rewriter.create<mlir::LLVM::GlobalOp>(loc, objTy, isConst, linkage,
+                                                   global.sym_name(), initAttr);
     auto &gr = g.getInitializerRegion();
     rewriter.inlineRegionBefore(global.region(), gr, gr.end());
     if (!gr.empty()) {
