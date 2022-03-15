@@ -428,16 +428,27 @@ static mlir::FuncOp getOutputFunc(mlir::Location loc,
     else if (width == 64)
       return getIORuntimeFunc<mkIOKey(OutputReal64)>(loc, builder);
   }
+  auto kindMap = fir::getKindMapping(builder.getModule());
   if (auto ty = type.dyn_cast<fir::ComplexType>()) {
-    if (auto kind = ty.getFKind(); kind == 4)
+    // COMPLEX(KIND=k) corresponds to a pair of REAL(KIND=k).
+    auto width = kindMap.getRealBitsize(ty.getFKind());
+    if (width == 32)
       return getIORuntimeFunc<mkIOKey(OutputComplex32)>(loc, builder);
-    else if (kind == 8)
+    else if (width == 64)
       return getIORuntimeFunc<mkIOKey(OutputComplex64)>(loc, builder);
   }
   if (type.isa<fir::LogicalType>())
     return getIORuntimeFunc<mkIOKey(OutputLogical)>(loc, builder);
-  if (fir::factory::CharacterExprHelper::isCharacterScalar(type))
-    return getIORuntimeFunc<mkIOKey(OutputAscii)>(loc, builder);
+  if (fir::factory::CharacterExprHelper::isCharacterScalar(type)) {
+    // TODO: What would it mean if the default CHARACTER KIND is set to a wide
+    // character encoding scheme? How do we handle UTF-8? Is it a distinct KIND
+    // value? For now, assume that if the default CHARACTER KIND is 8 bit,
+    // then it is an ASCII string and UTF-8 is unsupported.
+    auto asciiKind = kindMap.defaultCharacterKind();
+    if (kindMap.getCharacterBitsize(asciiKind) == 8 &&
+        fir::factory::CharacterExprHelper::getCharacterKind(type) == asciiKind)
+      return getIORuntimeFunc<mkIOKey(OutputAscii)>(loc, builder);
+  }
   return getIORuntimeFunc<mkIOKey(OutputDescriptor)>(loc, builder);
 }
 
@@ -516,16 +527,22 @@ static mlir::FuncOp getInputFunc(mlir::Location loc, fir::FirOpBuilder &builder,
     else if (width <= 64)
       return getIORuntimeFunc<mkIOKey(InputReal64)>(loc, builder);
   }
+  auto kindMap = fir::getKindMapping(builder.getModule());
   if (auto ty = type.dyn_cast<fir::ComplexType>()) {
-    if (auto kind = ty.getFKind(); kind <= 4)
+    auto width = kindMap.getRealBitsize(ty.getFKind());
+    if (width <= 32)
       return getIORuntimeFunc<mkIOKey(InputComplex32)>(loc, builder);
-    else if (kind <= 8)
+    else if (width <= 64)
       return getIORuntimeFunc<mkIOKey(InputComplex64)>(loc, builder);
   }
   if (type.isa<fir::LogicalType>())
     return getIORuntimeFunc<mkIOKey(InputLogical)>(loc, builder);
-  if (fir::factory::CharacterExprHelper::isCharacterScalar(type))
-    return getIORuntimeFunc<mkIOKey(InputAscii)>(loc, builder);
+  if (fir::factory::CharacterExprHelper::isCharacterScalar(type)) {
+    auto asciiKind = kindMap.defaultCharacterKind();
+    if (kindMap.getCharacterBitsize(asciiKind) == 8 &&
+        fir::factory::CharacterExprHelper::getCharacterKind(type) == asciiKind)
+      return getIORuntimeFunc<mkIOKey(InputAscii)>(loc, builder);
+  }
   return getIORuntimeFunc<mkIOKey(InputDescriptor)>(loc, builder);
 }
 
@@ -1978,9 +1995,9 @@ mlir::Value genInquireSpec<Fortran::parser::InquireSpec::IntVar>(
   if (!eleTy)
     fir::emitFatalError(loc,
                         "internal error: expected a memory reference type");
-  auto bitWidth = eleTy.cast<mlir::IntegerType>().getWidth();
+  auto width = eleTy.cast<mlir::IntegerType>().getWidth();
   mlir::IndexType idxTy = builder.getIndexType();
-  mlir::Value kind = builder.createIntegerConstant(loc, idxTy, bitWidth / 8);
+  mlir::Value kind = builder.createIntegerConstant(loc, idxTy, width / 8);
   llvm::SmallVector<mlir::Value> args = {
       builder.createConvert(loc, specFuncTy.getInput(0), cookie),
       builder.createIntegerConstant(
