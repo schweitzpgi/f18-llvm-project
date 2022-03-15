@@ -145,4 +145,13 @@ subroutine alloc_component_eval_only_once(x)
   call assumed_shape(x(ifoo())%p)
 end subroutine
 
+! CHECK-LABEL: func @_QMoptPnull_as_optional() {
+subroutine null_as_optional
+  ! CHECK: %[[temp:.*]] = fir.alloca !fir.llvm_ptr<none>
+  ! CHECK: %[[null:.*]] = fir.zero_bits !fir.ref<none>
+  ! CHECK: fir.store %{{.*}} to %[[temp]] : !fir.ref<!fir.llvm_ptr<none>>
+  ! CHECK: fir.call @_QMoptPassumed_shape(%{{.*}}) : (!fir.box<!fir.array<?xf32>>) -> ()
+ call assumed_shape(null())
+end subroutine null_as_optional
+
 end module
