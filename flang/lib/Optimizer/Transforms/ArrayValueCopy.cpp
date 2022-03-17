@@ -19,6 +19,7 @@
 #include "flang/Optimizer/Support/FIRContext.h"
 #include "flang/Optimizer/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/Debug.h"
 
@@ -116,9 +117,22 @@ private:
 /// Helper class to collect all array operations that produced an array value.
 class ReachCollector {
 public:
-  ReachCollector(llvm::SmallVectorImpl<mlir::Operation *> &reach,
-                 mlir::Region *loopRegion)
-      : reach{reach}, loopRegion{loopRegion} {}
+  /// Return all ops that produce the array value that is stored into the
+  /// `array_merge_store`.
+  static void reachingValues(llvm::SmallVectorImpl<mlir::Operation *> &reach,
+                             ArrayMergeStoreOp mergeStore) {
+    mlir::Value seq = mergeStore.sequence();
+    reach.clear();
+    ReachCollector collector(
+        reach, mlir::cast<ArrayLoadOp>(mergeStore.original().getDefiningOp()),
+        mergeStore);
+    collector.collectArrayMentionFrom(seq);
+  }
+
+private:
+  explicit ReachCollector(llvm::SmallVectorImpl<mlir::Operation *> &reach,
+                          ArrayLoadOp top, ArrayMergeStoreOp bottom)
+      : reach{reach}, exprTop{top}, exprBtm{bottom} {}
 
   void collectArrayMentionFrom(mlir::Operation *op, mlir::ValueRange range) {
     if (range.empty()) {
@@ -150,6 +164,19 @@ public:
     }
   }
 
+  /// Is \p op in the region of the array expression.
+  inline bool inArrayExprRegion(mlir::Operation *op) {
+    return domInfo.dominates(exprTop.getOperation(), op) &&
+           postDomInfo.postDominates(exprBtm.getOperation(), op);
+  }
+
+  /// Is \p op in the elemental computation body of the array expression.
+  inline bool inArrayExprBody(mlir::Operation *op) {
+    return domInfo.dominates(exprTop.getOperation(), op) &&
+           !domInfo.dominates(op, exprBtm.getOperation()) &&
+           postDomInfo.postDominates(exprBtm.getOperation(), op);
+  }
+
   void collectArrayMentionFrom(mlir::Operation *op, mlir::Value val) {
     // `val` is defined by an Op, process the defining Op.
     // If `val` is defined by a region containing Op, we want to drill down
@@ -176,13 +203,12 @@ public:
       return;
     }
     if (auto box = mlir::dyn_cast<EmboxOp>(op)) {
-      for (auto *user : box.memref().getUsers())
-        if (user != op)
-          collectArrayMentionFrom(user, user->getResults());
+      if (inArrayExprBody(box))
+        reach.push_back(box);
       return;
     }
     if (auto mergeStore = mlir::dyn_cast<ArrayMergeStoreOp>(op)) {
-      if (opIsInsideLoops(mergeStore))
+      if (inArrayExprRegion(mergeStore))
         collectArrayMentionFrom(mergeStore.sequence());
       return;
     }
@@ -192,7 +218,7 @@ public:
       // that produced the value being stored to it.
       for (auto *user : op->getUsers())
         if (auto store = mlir::dyn_cast<fir::StoreOp>(user))
-          if (opIsInsideLoops(store))
+          if (inArrayExprRegion(store))
             collectArrayMentionFrom(store.value());
       return;
     }
@@ -280,31 +306,6 @@ public:
     emitFatalError(val.getLoc(), "unhandled value");
   }
 
-  /// Return all ops that produce the array value that is stored into the
-  /// `array_merge_store`.
-  static void reachingValues(llvm::SmallVectorImpl<mlir::Operation *> &reach,
-                             mlir::Value seq) {
-    reach.clear();
-    mlir::Region *loopRegion = nullptr;
-    if (auto doLoop = mlir::dyn_cast_or_null<DoLoopOp>(seq.getDefiningOp()))
-      loopRegion = &doLoop->getRegion(0);
-    ReachCollector collector(reach, loopRegion);
-    collector.collectArrayMentionFrom(seq);
-  }
-
-private:
-  /// Is \op inside the loop nest region ?
-  /// FIXME: replace this structural dependence with graph properties.
-  bool opIsInsideLoops(mlir::Operation *op) const {
-    auto *region = op->getParentRegion();
-    while (region) {
-      if (region == loopRegion)
-        return true;
-      region = region->getParentRegion();
-    }
-    return false;
-  }
-
   /// Recursively trace the use of an operation results, calling
   /// collectArrayMentionFrom on the direct and indirect user operands.
   void followUsers(mlir::Operation *op) {
@@ -317,8 +318,10 @@ private:
 
   llvm::SmallVectorImpl<mlir::Operation *> &reach;
   llvm::SmallPtrSet<mlir::Value, 16> visited;
-  /// Region of the loops nest that produced the array value.
-  mlir::Region *loopRegion;
+  ArrayLoadOp exprTop;
+  ArrayMergeStoreOp exprBtm;
+  mlir::DominanceInfo domInfo;
+  mlir::PostDominanceInfo postDomInfo;
 };
 } // namespace
 
@@ -527,7 +530,7 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
   mlir::Value load;
   mlir::Value addr = st.memref();
   const bool storeHasPointerType = hasPointerType(addr.getType());
-  for (auto *op : reach)
+  for (auto *op : reach) {
     if (auto ld = mlir::dyn_cast<ArrayLoadOp>(op)) {
       mlir::Type ldTy = ld.memref().getType();
       if (ld.memref() == addr) {
@@ -541,7 +544,7 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
           return true;
         }
         load = ld;
-      } else if ((hasPointerType(ldTy) || storeHasPointerType)) {
+      } else if (hasPointerType(ldTy) || storeHasPointerType) {
         // TODO: Use target attribute to restrict this case further.
         // TODO: Check if types can also allow ruling out some cases. For now,
         // the fact that equivalences is using pointer attribute to enforce
@@ -553,7 +556,13 @@ static bool conflictOnLoad(llvm::ArrayRef<mlir::Operation *> reach,
         // here.
         return true;
       }
+    } else if (auto box = mlir::dyn_cast<EmboxOp>(op)) {
+      // If the body of the array operation is passing the destination array as
+      // an argument to a function, then make sure a copy of the array is made.
+      if (box.memref() == st.memref())
+        return true;
     }
+  }
   return false;
 }
 
@@ -685,7 +694,7 @@ void ArrayCopyAnalysis::construct(mlir::MutableArrayRef<mlir::Region> regions) {
           construct(op.getRegions());
         if (auto st = mlir::dyn_cast<ArrayMergeStoreOp>(op)) {
           llvm::SmallVector<mlir::Operation *> values;
-          ReachCollector::reachingValues(values, st.sequence());
+          ReachCollector::reachingValues(values, st);
           bool callConflict = conservativeCallConflict(values);
           llvm::SmallVector<mlir::Operation *> mentions;
           arrayMentions(mentions,

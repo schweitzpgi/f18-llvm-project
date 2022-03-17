@@ -1699,6 +1699,18 @@ mlir::Value fir::IterWhileOp::blockArgToSourceOp(unsigned blockArgNum) {
   return {};
 }
 
+void fir::IterWhileOp::getSuccessorRegions(
+    llvm::Optional<unsigned> index, llvm::ArrayRef<mlir::Attribute> operands,
+    llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
+  if (!index.hasValue()) {
+    regions.emplace_back(&getLoopBody(), getRegionIterArgs());
+    return;
+  }
+  assert(index.getValue() == 0 && "expected loop region");
+  regions.emplace_back(&getLoopBody(), getRegionIterArgs());
+  regions.emplace_back(getResults());
+}
+
 //===----------------------------------------------------------------------===//
 // LenParamIndexOp
 //===----------------------------------------------------------------------===//
@@ -2000,6 +2012,18 @@ mlir::Value fir::DoLoopOp::blockArgToSourceOp(unsigned blockArgNum) {
   if (blockArgNum > 0 && blockArgNum <= getInitArgs().size())
     return getInitArgs()[blockArgNum - 1];
   return {};
+}
+
+void fir::DoLoopOp::getSuccessorRegions(
+    llvm::Optional<unsigned> index, llvm::ArrayRef<mlir::Attribute> operands,
+    llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
+  if (!index.hasValue()) {
+    regions.emplace_back(&getLoopBody(), getRegionIterArgs());
+    return;
+  }
+  assert(index.getValue() == 0 && "expected loop region");
+  regions.emplace_back(&getLoopBody(), getRegionIterArgs());
+  regions.emplace_back(getResults());
 }
 
 //===----------------------------------------------------------------------===//
@@ -3090,6 +3114,26 @@ void fir::IfOp::resultToSourceOps(llvm::SmallVectorImpl<mlir::Value> &results,
   term = getElseRegion().front().getTerminator();
   if (resultNum < term->getNumOperands())
     results.push_back(term->getOperand(resultNum));
+}
+
+void fir::IfOp::getSuccessorRegions(
+    llvm::Optional<unsigned> index, llvm::ArrayRef<mlir::Attribute> operands,
+    llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
+  if (index.hasValue()) {
+    regions.emplace_back(getResults());
+    return;
+  }
+  Region *elseRegion = &this->elseRegion();
+  if (elseRegion->empty())
+    elseRegion = nullptr;
+  if (auto condAttr = operands.front().dyn_cast_or_null<mlir::IntegerAttr>()) {
+    bool condition = condAttr.getValue().isOneValue();
+    regions.emplace_back(condition ? &thenRegion() : elseRegion);
+    return;
+  }
+  regions.emplace_back(&thenRegion());
+  if (elseRegion)
+    regions.emplace_back(elseRegion);
 }
 
 //===----------------------------------------------------------------------===//

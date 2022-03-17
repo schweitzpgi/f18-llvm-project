@@ -53,3 +53,48 @@ func @test_overlap_with_alloc_components(%arg0: !fir.ref<!fir.array<10x!t_with_a
 // CHECK:   %[[VAL_72:.*]] = fir.convert %[[VAL_12]] : (!fir.box<!fir.ref<!fir.array<10x!fir.type<t{i:!fir.box<!fir.heap<!fir.array<?xi32>>>}>>>>) -> !fir.box<none>
 // CHECK:   %[[VAL_73:.*]] = fir.call @_FortranADestroy(%[[VAL_72]]) : (!fir.box<none>) -> none
 // CHECK:   fir.freemem %[[VAL_11]]
+
+func @_QMtestPissue() {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %cst = arith.constant 4.200000e+01 : f32
+  %0 = fir.alloca !fir.array<1xf32> {bindc_name = "a", uniq_name = "_QMtestFissueEa"}
+  %1 = fir.shape %c1 : (index) -> !fir.shape<1>
+  %2 = fir.array_load %0(%1) : (!fir.ref<!fir.array<1xf32>>, !fir.shape<1>) -> !fir.array<1xf32>
+  %3 = fir.do_loop %arg0 = %c0 to %c0 step %c1 unordered iter_args(%arg1 = %2) -> (!fir.array<1xf32>) {
+    %13 = fir.array_update %arg1, %cst, %arg0 : (!fir.array<1xf32>, f32, index) -> !fir.array<1xf32>
+    fir.result %13 : !fir.array<1xf32>
+  }
+  fir.array_merge_store %2, %3 to %0 : !fir.array<1xf32>, !fir.array<1xf32>, !fir.ref<!fir.array<1xf32>>
+  %4 = fir.array_load %0(%1) : (!fir.ref<!fir.array<1xf32>>, !fir.shape<1>) -> !fir.array<1xf32>
+  %5 = fir.embox %0(%1) : (!fir.ref<!fir.array<1xf32>>, !fir.shape<1>) -> !fir.box<!fir.array<1xf32>>
+  %6:3 = fir.box_dims %5, %c0 : (!fir.box<!fir.array<1xf32>>, index) -> (index, index, index)
+  %7 = fir.alloca !fir.array<?xf32>, %c1 {bindc_name = ".result"}
+  %8 = fir.shape %6#1 : (index) -> !fir.shape<1>
+  %9 = fir.convert %5 : (!fir.box<!fir.array<1xf32>>) -> !fir.box<!fir.array<?xf32>>
+  %10 = fir.call @_QMtestPfoo(%9) : (!fir.box<!fir.array<?xf32>>) -> !fir.array<?xf32>
+  fir.save_result %10 to %7(%8) : !fir.array<?xf32>, !fir.ref<!fir.array<?xf32>>, !fir.shape<1>
+  %11 = fir.array_load %7(%8) : (!fir.ref<!fir.array<?xf32>>, !fir.shape<1>) -> !fir.array<?xf32>
+  %12 = fir.do_loop %arg0 = %c0 to %c0 step %c1 unordered iter_args(%arg1 = %4) -> (!fir.array<1xf32>) {
+    %13 = fir.array_fetch %11, %arg0 : (!fir.array<?xf32>, index) -> f32
+    %14 = fir.array_update %arg1, %13, %arg0 : (!fir.array<1xf32>, f32, index) -> !fir.array<1xf32>
+    fir.result %14 : !fir.array<1xf32>
+  }
+  fir.array_merge_store %4, %12 to %0 : !fir.array<1xf32>, !fir.array<1xf32>, !fir.ref<!fir.array<1xf32>>
+  return
+}
+
+// CHECK-LABEL: func @_QMtestPissue() {
+// CHECK: fir.do_loop %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} unordered iter_args(%{{.*}} = %{{.*}}) -> (!fir.array<1xf32>) {
+// CHECK: fir.result %{{.*}} : !fir.array<1xf32>
+// CHECK-NOT: fir.do_loop
+// CHECK: fir.call @_QMtestPfoo
+// CHECK: fir.do_loop %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} unordered iter_args(%{{.*}} = %{{.*}}) -> (!fir.array<1xf32>) {
+// CHECK: fir.result %{{.*}} : !fir.array<1xf32>
+// CHECK-NOT: fir.do_loop
+// CHECK: return
+
+func private @_QMtestPfoo(!fir.box<!fir.array<?xf32>> {fir.bindc_name = "b"}) -> !fir.array<?xf32>
+func private @llvm.stacksave() -> !fir.ref<i8>
+func private @llvm.stackrestore(!fir.ref<i8>)
+

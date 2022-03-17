@@ -2132,7 +2132,9 @@ class region_Op<string mnemonic, list<OpTrait> traits = []> :
 }
 
 def fir_DoLoopOp : region_Op<"do_loop",
-    [DeclareOpInterfaceMethods<LoopLikeOpInterface>]> {
+    [DeclareOpInterfaceMethods<LoopLikeOpInterface>,
+     DeclareOpInterfaceMethods<RegionBranchOpInterface>,
+     RecursiveSideEffects]> {
   let summary = "generalized loop operation";
   let description = [{
     Generalized high-level looping construct. This operation is similar to
@@ -2227,7 +2229,9 @@ def fir_DoLoopOp : region_Op<"do_loop",
   }];
 }
 
-def fir_IfOp : region_Op<"if", [NoRegionArguments]> {
+def fir_IfOp : region_Op<"if",
+      [DeclareOpInterfaceMethods<RegionBranchOpInterface>,
+       RecursiveSideEffects, NoRegionArguments]> {
   let summary = "if-then-else conditional operation";
   let description = [{
     Used to conditionally execute operations. This operation is the FIR
@@ -2277,7 +2281,9 @@ def fir_IfOp : region_Op<"if", [NoRegionArguments]> {
 }
 
 def fir_IterWhileOp : region_Op<"iterate_while",
-    [DeclareOpInterfaceMethods<LoopLikeOpInterface>]> {
+    [DeclareOpInterfaceMethods<LoopLikeOpInterface>,
+     DeclareOpInterfaceMethods<RegionBranchOpInterface>,
+     RecursiveSideEffects]> {
   let summary = "DO loop with early exit condition";
   let description = [{
     This single-entry, single-exit looping construct is useful for lowering
