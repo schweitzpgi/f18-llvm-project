@@ -109,7 +109,8 @@ struct TargetI386 : public GenericTarget<TargetI386> {
       marshal.emplace_back(fir::ReferenceType::get(structTy),
                            AT{/*alignment=*/4, /*byval=*/false, /*sret=*/true});
     } else {
-      fir::emitFatalError(loc, "complex for this precision not implemented");
+      fir::emitFatalError(loc,
+                          "not yet implemented: complex for this precision");
     }
     return marshal;
   }
@@ -145,7 +146,8 @@ struct TargetX86_64 : public GenericTarget<TargetX86_64> {
                                mlir::TupleType::get(eleTy.getContext(), range)),
                            AT{/*align=*/16, /*byval=*/true});
     } else {
-      fir::emitFatalError(loc, "complex for this precision not implemented");
+      fir::emitFatalError(loc,
+                          "not yet implemented: complex for this precision");
     }
     return marshal;
   }
@@ -171,7 +173,8 @@ struct TargetX86_64 : public GenericTarget<TargetX86_64> {
                                mlir::TupleType::get(eleTy.getContext(), range)),
                            AT{/*align=*/16, /*byval=*/false, /*sret=*/true});
     } else {
-      fir::emitFatalError(loc, "complex for this precision not implemented");
+      fir::emitFatalError(loc,
+                          "not yet implemented: complex for this precision");
     }
     return marshal;
   }
@@ -197,7 +200,8 @@ struct TargetAArch64 : public GenericTarget<TargetAArch64> {
       // [2 x t]   array of 2 eleTy
       marshal.emplace_back(fir::SequenceType::get({2}, eleTy), AT{});
     } else {
-      fir::emitFatalError(loc, "complex for this precision not implemented");
+      fir::emitFatalError(loc,
+                          "not yet implemented: complex for this precision");
     }
     return marshal;
   }
@@ -214,7 +218,8 @@ struct TargetAArch64 : public GenericTarget<TargetAArch64> {
       marshal.emplace_back(mlir::TupleType::get(eleTy.getContext(), range),
                            AT{});
     } else {
-      fir::emitFatalError(loc, "complex for this precision not implemented");
+      fir::emitFatalError(loc,
+                          "not yet implemented: complex for this precision");
     }
     return marshal;
   }
@@ -304,5 +309,6 @@ fir::CodeGenSpecifics::get(mlir::MLIRContext *ctx, llvm::Triple &&trp,
     }
     break;
   }
-  fir::emitFatalError(mlir::UnknownLoc::get(ctx), "target not implemented");
+  fir::emitFatalError(mlir::UnknownLoc::get(ctx),
+                      "not yet implemented: selected target is not supported");
 }
