@@ -496,7 +496,7 @@ void fir::factory::associateMutableBox(fir::FirOpBuilder &builder,
           // fir.box to update the LHS.
           auto rawAddr = builder.create<fir::BoxAddrOp>(loc, arr.getMemTy(),
                                                         arr.getAddr());
-          auto extents = fir::factory::getExtents(builder, loc, source);
+          auto extents = fir::factory::getExtents(loc, builder, source);
           llvm::SmallVector<mlir::Value> lenParams;
           if (arr.isCharacter()) {
             lenParams.emplace_back(
@@ -839,7 +839,7 @@ void fir::factory::finalizeRealloc(fir::FirOpBuilder &builder,
                "reallocation of derived type entities with length parameters");
         auto lengths = getNewLengths(builder, loc, box, lenParams);
         auto heap = fir::getBase(realloc.newValue);
-        auto extents = fir::factory::getExtents(builder, loc, realloc.newValue);
+        auto extents = fir::factory::getExtents(loc, builder, realloc.newValue);
         builder.genIfThen(loc, realloc.oldAddressWasAllocated)
             .genThen(
                 [&]() { genFinalizeAndFree(builder, loc, realloc.oldAddress); })

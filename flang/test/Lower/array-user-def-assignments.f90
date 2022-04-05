@@ -114,18 +114,21 @@ end module
 ! CHECK:         %[[VAL_3:.*]]:3 = fir.box_dims %[[VAL_0]], %[[VAL_2]] : (!fir.box<!fir.array<?xi32>>, index) -> (index, index, index)
 ! CHECK:         %[[VAL_4:.*]] = fir.array_load %[[VAL_0]] : (!fir.box<!fir.array<?xi32>>) -> !fir.array<?xi32>
 ! CHECK:         %[[VAL_5:.*]] = fir.array_load %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> !fir.array<?x!fir.char<1,?>>
-! CHECK:         %[[VAL_6:.*]] = arith.constant 1 : index
-! CHECK:         %[[VAL_7:.*]] = arith.constant 0 : index
-! CHECK:         %[[VAL_8:.*]] = arith.subi %[[VAL_3]]#1, %[[VAL_6]] : index
-! CHECK:         %[[VAL_9:.*]] = fir.do_loop %[[VAL_10:.*]] = %[[VAL_7]] to %[[VAL_8]] step %[[VAL_6]] unordered iter_args(%[[VAL_11:.*]] = %[[VAL_4]]) -> (!fir.array<?xi32>) {
-! CHECK:           %[[VAL_12:.*]] = fir.array_access %[[VAL_5]], %[[VAL_10]] : (!fir.array<?x!fir.char<1,?>>, index) -> !fir.ref<!fir.char<1,?>>
-! CHECK:           %[[VAL_13:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
-! CHECK:           %[[VAL_14:.*]]:2 = fir.array_modify %[[VAL_11]], %[[VAL_10]] : (!fir.array<?xi32>, index) -> (!fir.ref<i32>, !fir.array<?xi32>)
-! CHECK:           %[[VAL_15:.*]] = fir.emboxchar %[[VAL_12]], %[[VAL_13]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
-! CHECK:           fir.call @_QPsfrom_char(%[[VAL_14]]#0, %[[VAL_15]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
-! CHECK:           fir.result %[[VAL_14]]#1 : !fir.array<?xi32>
+! CHECK:         %[[VAL_6:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
+! CHECK:         %[[VAL_7:.*]] = arith.constant 1 : index
+! CHECK:         %[[VAL_8:.*]] = arith.divsi %[[VAL_6]], %[[VAL_7]] : index
+! CHECK:         %[[VAL_9:.*]] = arith.constant 1 : index
+! CHECK:         %[[VAL_10:.*]] = arith.constant 0 : index
+! CHECK:         %[[VAL_11:.*]] = arith.subi %[[VAL_3]]#1, %[[VAL_9]] : index
+! CHECK:         %[[VAL_12:.*]] = fir.do_loop %[[VAL_13:.*]] = %[[VAL_10]] to %[[VAL_11]] step %[[VAL_9]] unordered iter_args(%[[VAL_14:.*]] = %[[VAL_4]]) -> (!fir.array<?xi32>) {
+! CHECK:           %[[VAL_15:.*]] = fir.array_access %[[VAL_5]], %[[VAL_13]] typeparams %[[VAL_8]] : (!fir.array<?x!fir.char<1,?>>, index, index) -> !fir.ref<!fir.char<1,?>>
+! CHECK:           %[[VAL_16:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
+! CHECK:           %[[VAL_17:.*]]:2 = fir.array_modify %[[VAL_14]], %[[VAL_13]] : (!fir.array<?xi32>, index) -> (!fir.ref<i32>, !fir.array<?xi32>)
+! CHECK:           %[[VAL_18:.*]] = fir.emboxchar %[[VAL_15]], %[[VAL_16]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
+! CHECK:           fir.call @_QPsfrom_char(%[[VAL_17]]#0, %[[VAL_18]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
+! CHECK:           fir.result %[[VAL_17]]#1 : !fir.array<?xi32>
 ! CHECK:         }
-! CHECK:         fir.array_merge_store %[[VAL_4]], %[[VAL_16:.*]] to %[[VAL_0]] : !fir.array<?xi32>, !fir.array<?xi32>, !fir.box<!fir.array<?xi32>>
+! CHECK:         fir.array_merge_store %[[VAL_4]], %[[VAL_19:.*]] to %[[VAL_0]] : !fir.array<?xi32>, !fir.array<?xi32>, !fir.box<!fir.array<?xi32>>
 ! CHECK:         return
 ! CHECK:       }
 
@@ -601,19 +604,22 @@ end subroutine
 ! CHECK:           %[[VAL_16:.*]] = fir.convert %[[VAL_15]] : (i32) -> i64
 ! CHECK:           %[[VAL_17:.*]] = fir.convert %[[VAL_16]] : (i64) -> index
 ! CHECK:           %[[VAL_18:.*]] = arith.subi %[[VAL_17]], %[[VAL_14]] : index
-! CHECK:           %[[VAL_19:.*]] = fir.array_access %[[VAL_9]], %[[VAL_18]] : (!fir.array<?x!fir.char<1,?>>, index) -> !fir.ref<!fir.char<1,?>>
-! CHECK:           %[[VAL_20:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
-! CHECK:           %[[VAL_21:.*]] = arith.constant 1 : index
-! CHECK:           %[[VAL_22:.*]] = fir.load %[[VAL_2]] : !fir.ref<i32>
-! CHECK:           %[[VAL_23:.*]] = fir.convert %[[VAL_22]] : (i32) -> i64
-! CHECK:           %[[VAL_24:.*]] = fir.convert %[[VAL_23]] : (i64) -> index
-! CHECK:           %[[VAL_25:.*]] = arith.subi %[[VAL_24]], %[[VAL_21]] : index
-! CHECK:           %[[VAL_26:.*]]:2 = fir.array_modify %[[VAL_12]], %[[VAL_25]] : (!fir.array<?xi32>, index) -> (!fir.ref<i32>, !fir.array<?xi32>)
-! CHECK:           %[[VAL_27:.*]] = fir.emboxchar %[[VAL_19]], %[[VAL_20]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
-! CHECK:           fir.call @_QPsfrom_char(%[[VAL_26]]#0, %[[VAL_27]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
-! CHECK:           fir.result %[[VAL_26]]#1 : !fir.array<?xi32>
+! CHECK:           %[[VAL_19:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
+! CHECK:           %[[VAL_20:.*]] = arith.constant 1 : index
+! CHECK:           %[[VAL_21:.*]] = arith.divsi %[[VAL_19]], %[[VAL_20]] : index
+! CHECK:           %[[VAL_22:.*]] = fir.array_access %[[VAL_9]], %[[VAL_18]] typeparams %[[VAL_21]] : (!fir.array<?x!fir.char<1,?>>, index, index) -> !fir.ref<!fir.char<1,?>>
+! CHECK:           %[[VAL_23:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x!fir.char<1,?>>>) -> index
+! CHECK:           %[[VAL_24:.*]] = arith.constant 1 : index
+! CHECK:           %[[VAL_25:.*]] = fir.load %[[VAL_2]] : !fir.ref<i32>
+! CHECK:           %[[VAL_26:.*]] = fir.convert %[[VAL_25]] : (i32) -> i64
+! CHECK:           %[[VAL_27:.*]] = fir.convert %[[VAL_26]] : (i64) -> index
+! CHECK:           %[[VAL_28:.*]] = arith.subi %[[VAL_27]], %[[VAL_24]] : index
+! CHECK:           %[[VAL_29:.*]]:2 = fir.array_modify %[[VAL_12]], %[[VAL_28]] : (!fir.array<?xi32>, index) -> (!fir.ref<i32>, !fir.array<?xi32>)
+! CHECK:           %[[VAL_30:.*]] = fir.emboxchar %[[VAL_22]], %[[VAL_23]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
+! CHECK:           fir.call @_QPsfrom_char(%[[VAL_29]]#0, %[[VAL_30]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
+! CHECK:           fir.result %[[VAL_29]]#1 : !fir.array<?xi32>
 ! CHECK:         }
-! CHECK:         fir.array_merge_store %[[VAL_8]], %[[VAL_28:.*]] to %[[VAL_0]] : !fir.array<?xi32>, !fir.array<?xi32>, !fir.box<!fir.array<?xi32>>
+! CHECK:         fir.array_merge_store %[[VAL_8]], %[[VAL_31:.*]] to %[[VAL_0]] : !fir.array<?xi32>, !fir.array<?xi32>, !fir.box<!fir.array<?xi32>>
 ! CHECK:         return
 ! CHECK:       }
 
@@ -721,19 +727,22 @@ end subroutine
 ! CHECK:             %[[VAL_44:.*]] = arith.subi %[[VAL_31]], %[[VAL_31]] : index
 ! CHECK:             %[[VAL_45:.*]] = arith.muli %[[VAL_42]], %[[VAL_37]] : index
 ! CHECK:             %[[VAL_46:.*]] = arith.addi %[[VAL_44]], %[[VAL_45]] : index
-! CHECK:             %[[VAL_47:.*]] = fir.array_access %[[VAL_9]], %[[VAL_35]], %[[VAL_46]] : (!fir.array<?x?x!fir.char<1,?>>, index, index) -> !fir.ref<!fir.char<1,?>>
-! CHECK:             %[[VAL_48:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x?x!fir.char<1,?>>>) -> index
-! CHECK:             %[[VAL_49:.*]] = arith.subi %[[VAL_16]], %[[VAL_16]] : index
-! CHECK:             %[[VAL_50:.*]] = arith.muli %[[VAL_42]], %[[VAL_22]] : index
-! CHECK:             %[[VAL_51:.*]] = arith.addi %[[VAL_49]], %[[VAL_50]] : index
-! CHECK:             %[[VAL_52:.*]]:2 = fir.array_modify %[[VAL_43]], %[[VAL_20]], %[[VAL_51]] : (!fir.array<?x?xi32>, index, index) -> (!fir.ref<i32>, !fir.array<?x?xi32>)
-! CHECK:             %[[VAL_53:.*]] = fir.emboxchar %[[VAL_47]], %[[VAL_48]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
-! CHECK:             fir.call @_QPsfrom_char(%[[VAL_52]]#0, %[[VAL_53]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
-! CHECK:             fir.result %[[VAL_52]]#1 : !fir.array<?x?xi32>
+! CHECK:             %[[VAL_47:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x?x!fir.char<1,?>>>) -> index
+! CHECK:             %[[VAL_48:.*]] = arith.constant 1 : index
+! CHECK:             %[[VAL_49:.*]] = arith.divsi %[[VAL_47]], %[[VAL_48]] : index
+! CHECK:             %[[VAL_50:.*]] = fir.array_access %[[VAL_9]], %[[VAL_35]], %[[VAL_46]] typeparams %[[VAL_49]] : (!fir.array<?x?x!fir.char<1,?>>, index, index, index) -> !fir.ref<!fir.char<1,?>>
+! CHECK:             %[[VAL_51:.*]] = fir.box_elesize %[[VAL_1]] : (!fir.box<!fir.array<?x?x!fir.char<1,?>>>) -> index
+! CHECK:             %[[VAL_52:.*]] = arith.subi %[[VAL_16]], %[[VAL_16]] : index
+! CHECK:             %[[VAL_53:.*]] = arith.muli %[[VAL_42]], %[[VAL_22]] : index
+! CHECK:             %[[VAL_54:.*]] = arith.addi %[[VAL_52]], %[[VAL_53]] : index
+! CHECK:             %[[VAL_55:.*]]:2 = fir.array_modify %[[VAL_43]], %[[VAL_20]], %[[VAL_54]] : (!fir.array<?x?xi32>, index, index) -> (!fir.ref<i32>, !fir.array<?x?xi32>)
+! CHECK:             %[[VAL_56:.*]] = fir.emboxchar %[[VAL_50]], %[[VAL_51]] : (!fir.ref<!fir.char<1,?>>, index) -> !fir.boxchar<1>
+! CHECK:             fir.call @_QPsfrom_char(%[[VAL_55]]#0, %[[VAL_56]]) : (!fir.ref<i32>, !fir.boxchar<1>) -> ()
+! CHECK:             fir.result %[[VAL_55]]#1 : !fir.array<?x?xi32>
 ! CHECK:           }
-! CHECK:           fir.result %[[VAL_54:.*]] : !fir.array<?x?xi32>
+! CHECK:           fir.result %[[VAL_57:.*]] : !fir.array<?x?xi32>
 ! CHECK:         }
-! CHECK:         fir.array_merge_store %[[VAL_8]], %[[VAL_55:.*]] to %[[VAL_0]] : !fir.array<?x?xi32>, !fir.array<?x?xi32>, !fir.box<!fir.array<?x?xi32>>
+! CHECK:         fir.array_merge_store %[[VAL_8]], %[[VAL_58:.*]] to %[[VAL_0]] : !fir.array<?x?xi32>, !fir.array<?x?xi32>, !fir.box<!fir.array<?x?xi32>>
 ! CHECK:         return
 ! CHECK:       }
 

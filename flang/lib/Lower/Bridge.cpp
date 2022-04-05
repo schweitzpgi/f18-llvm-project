@@ -441,7 +441,7 @@ public:
           // Create a contiguous temp with the same shape and length as
           // the original variable described by a fir.box.
           llvm::SmallVector<mlir::Value> extents =
-              fir::factory::getExtents(*builder, loc, hexv);
+              fir::factory::getExtents(loc, *builder, hexv);
           if (box.isDerivedWithLengthParameters())
             TODO(loc, "get length parameters from derived type BoxValue");
           if (box.isCharacter()) {
@@ -459,8 +459,8 @@ public:
         },
         [&](const auto &) -> fir::ExtendedValue {
           mlir::Value temp =
-              allocate(fir::factory::getExtents(*builder, loc, hexv),
-                       fir::getTypeParams(hexv));
+              allocate(fir::factory::getExtents(loc, *builder, hexv),
+                       fir::factory::getTypeParams(loc, *builder, hexv));
           return fir::substBase(hexv, temp);
         });
 

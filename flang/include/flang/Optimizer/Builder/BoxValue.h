@@ -25,6 +25,7 @@
 
 namespace fir {
 class FirOpBuilder;
+class ArrayLoadOp;
 
 class ArrayBoxValue;
 class BoxValue;
@@ -410,14 +411,36 @@ bool isArray(const ExtendedValue &exv);
 /// Get the type parameters for `exv`.
 llvm::SmallVector<mlir::Value> getTypeParams(const ExtendedValue &exv);
 
+//===----------------------------------------------------------------------===//
+// Functions that may generate IR to recover properties from extended values.
+//===----------------------------------------------------------------------===//
+namespace factory {
+
+/// Generalized function to recover dependent type parameters. This does away
+/// with the distinction between deferred and non-deferred LEN type parameters
+/// (Fortran definition), since that categorization is irrelevant when getting
+/// all type parameters for a value of dependent type.
+llvm::SmallVector<mlir::Value> getTypeParams(mlir::Location loc,
+                                             FirOpBuilder &builder,
+                                             const ExtendedValue &exv);
+
+/// Specialization of get type parameters for an ArrayLoadOp. An array load must
+/// either have all type parameters given as arguments or be a boxed value.
+llvm::SmallVector<mlir::Value>
+getTypeParams(mlir::Location loc, FirOpBuilder &builder, ArrayLoadOp load);
+
 // The generalized function to get a vector of extents is
-// fir::factory::getExtents(). See FIRBuilder.h.
+/// Get extents from \p box. For fir::BoxValue and
+/// fir::MutableBoxValue, this will generate code to read the extents.
+llvm::SmallVector<mlir::Value>
+getExtents(mlir::Location loc, FirOpBuilder &builder, const ExtendedValue &box);
 
 /// Get exactly one extent for any array-like extended value, \p exv. If \p exv
 /// is not an array or has rank less then \p dim, the result will be a nullptr.
-mlir::Value getExtentAtDimension(const ExtendedValue &exv,
-                                 FirOpBuilder &builder, mlir::Location loc,
-                                 unsigned dim);
+mlir::Value getExtentAtDimension(mlir::Location loc, FirOpBuilder &builder,
+                                 const ExtendedValue &exv, unsigned dim);
+
+} // namespace factory
 
 /// An extended value is a box of values pertaining to a discrete entity. It is
 /// used in lowering to track all the runtime values related to an entity. For

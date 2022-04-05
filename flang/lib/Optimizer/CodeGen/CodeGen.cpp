@@ -2226,15 +2226,9 @@ struct XArrayCoorOpConversion
         assert(eleTy && "result must be a refence-like type");
         if (fir::characterWithDynamicLen(eleTy)) {
           assert(coor.lenParams().size() == 1);
-          auto bitsInChar = lowerTy().getKindMap().getCharacterBitsize(
-              eleTy.cast<fir::CharacterType>().getFKind());
-          auto scaling = genConstantIndex(loc, idxTy, rewriter, bitsInChar / 8);
-          auto scaledBySize =
-              rewriter.create<mlir::LLVM::MulOp>(loc, idxTy, off, scaling);
           auto length = integerCast(loc, rewriter, idxTy,
                                     operands[coor.lenParamsOffset()]);
-          off = rewriter.create<mlir::LLVM::MulOp>(loc, idxTy, scaledBySize,
-                                                   length);
+          off = rewriter.create<mlir::LLVM::MulOp>(loc, idxTy, off, length);
         } else {
           TODO(loc, "compute size of derived type with type parameters");
         }
@@ -2294,8 +2288,7 @@ struct CoordinateOpConversion
       return doRewriteBox(coor, ty, operands, loc, rewriter);
 
     // Reference, pointer or a heap type
-    if (baseObjectTy
-            .isa<fir::ReferenceType, fir::PointerType, fir::HeapType>())
+    if (baseObjectTy.isa<fir::ReferenceType, fir::PointerType, fir::HeapType>())
       return doRewriteRefOrPtr(coor, ty, operands, loc, rewriter);
 
     return rewriter.notifyMatchFailure(
@@ -2411,10 +2404,9 @@ private:
     //   %idx = ... : i32
     //   %resultAddr = coordinate_of %box, %idx : !fir.ref<i32>
     // 2.3 (`fir.derived` inside `fir.array`)
-    //   %box = ... : !fir.box<!fir.array<10 x !fir.type<derived_1{field_1:f32, field_2:f32}>>>
-    //   %idx1 = ... : index
-    //   %idx2 = ... : i32
-    //   %resultAddr = coordinate_of %box, %idx1, %idx2 : !fir.ref<f32>
+    //   %box = ... : !fir.box<!fir.array<10 x !fir.type<derived_1{field_1:f32,
+    //   field_2:f32}>>> %idx1 = ... : index %idx2 = ... : i32 %resultAddr =
+    //   coordinate_of %box, %idx1, %idx2 : !fir.ref<f32>
     // 2.4. TODO: Either document or disable any other case that the following
     //  implementation might convert.
     mlir::LLVM::ConstantOp c0 =
@@ -2523,7 +2515,7 @@ private:
       }
       Optional<int> dims;
       SmallVector<mlir::Value> arrIdx;
-      for (std::size_t i = 1,  sz = operands.size(); i < sz; ++i) {
+      for (std::size_t i = 1, sz = operands.size(); i < sz; ++i) {
         mlir::Value nxtOpnd = operands[i];
 
         if (!cpnTy)

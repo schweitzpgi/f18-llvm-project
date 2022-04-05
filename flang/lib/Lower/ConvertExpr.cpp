@@ -2288,7 +2288,7 @@ public:
     assert(type && "expected descriptor or memory type");
     mlir::Location loc = getLoc();
     llvm::SmallVector<mlir::Value> extents =
-        fir::factory::getExtents(builder, loc, mold);
+        fir::factory::getExtents(loc, builder, mold);
     llvm::SmallVector<mlir::Value> allocMemTypeParams =
         fir::getTypeParams(mold);
     mlir::Value charLen;
@@ -3796,7 +3796,7 @@ public:
 
 private:
   void determineShapeOfDest(const fir::ExtendedValue &lhs) {
-    destShape = fir::factory::getExtents(builder, getLoc(), lhs);
+    destShape = fir::factory::getExtents(getLoc(), builder, lhs);
   }
 
   void determineShapeOfDest(const Fortran::lower::SomeExpr &lhs) {
@@ -3835,7 +3835,7 @@ private:
     mlir::Location loc = getLoc();
     mlir::IndexType idxTy = builder.getIndexType();
     llvm::SmallVector<mlir::Value> definedShape =
-        fir::factory::getExtents(builder, loc, exv);
+        fir::factory::getExtents(loc, builder, exv);
     mlir::Value one = builder.createIntegerConstant(loc, idxTy, 1);
     for (auto ss : llvm::enumerate(x.subscript())) {
       std::visit(Fortran::common::visitors{
@@ -3935,7 +3935,7 @@ private:
         // Get a reference to the array element to be amended.
         auto arrayOp = builder.create<fir::ArrayAccessOp>(
             loc, resRefTy, innerArg, iterSpace.iterVec(),
-            destination.typeparams());
+            fir::factory::getTypeParams(loc, builder, destination));
         if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
           llvm::SmallVector<mlir::Value> substringBounds;
           populateBounds(substringBounds, substring);
@@ -5334,8 +5334,8 @@ private:
                   // TODO: Avoid creating a new evaluate::Expr here
                   auto arrExpr = ignoreEvConvert(e);
                   if (createDestShape) {
-                    destShape.push_back(fir::getExtentAtDimension(
-                        arrayExv, builder, loc, subsIndex));
+                    destShape.push_back(fir::factory::getExtentAtDimension(
+                        loc, builder, arrayExv, subsIndex));
                   }
                   auto genArrFetch =
                       genVectorSubscriptArrayFetch(arrExpr, shapeIndex);
@@ -5625,7 +5625,7 @@ private:
       // copy-in copy-out semantics.
       return [=](IterSpace) -> ExtValue { return arrLd; };
     }
-    mlir::Operation::operand_range arrLdTypeParams = arrLoad.typeparams();
+    auto arrLdTypeParams = fir::factory::getTypeParams(loc, builder, arrLoad);
     if (isValueAttribute()) {
       // Semantics are value attribute.
       // Here the continuation will `array_fetch` a value from an array and
@@ -6549,7 +6549,8 @@ private:
         if (isAdjustedArrayElementType(eleTy)) {
           mlir::Type eleRefTy = builder.getRefType(eleTy);
           auto arrayOp = builder.create<fir::ArrayAccessOp>(
-              loc, eleRefTy, innerArg, iters.iterVec(), load.typeparams());
+              loc, eleRefTy, innerArg, iters.iterVec(),
+              fir::factory::getTypeParams(loc, builder, load));
           if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
             mlir::Value dstLen = fir::factory::genLenOfCharacter(
                 builder, loc, load, iters.iterVec(), substringBounds);
@@ -6599,7 +6600,8 @@ private:
         mlir::Type resTy = builder.getRefType(eleTy);
         // Use array element reference semantics.
         auto access = builder.create<fir::ArrayAccessOp>(
-            loc, resTy, load, iters.iterVec(), load.typeparams());
+            loc, resTy, load, iters.iterVec(),
+            fir::factory::getTypeParams(loc, builder, load));
         mlir::Value newBase = access;
         if (fir::isa_char(eleTy)) {
           mlir::Value dstLen = fir::factory::genLenOfCharacter(

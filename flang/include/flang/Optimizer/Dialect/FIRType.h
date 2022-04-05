@@ -193,6 +193,11 @@ inline mlir::Type unwrapPassByRefType(mlir::Type t) {
   return t;
 }
 
+/// Unwrap all referential and sequential outer types (if any). Returns the
+/// element type. This is useful for determining the element type of any object
+/// memory reference, whether it is a single instance or a series of instances.
+mlir::Type unwrapAllRefAndSeqType(mlir::Type ty);
+
 /// Unwrap all pointer and box types and return the element type if it is a
 /// sequence type, otherwise return null.
 inline fir::SequenceType unwrapUntilSeqType(mlir::Type t) {

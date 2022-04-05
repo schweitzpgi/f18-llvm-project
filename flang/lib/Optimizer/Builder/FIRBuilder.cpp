@@ -639,7 +639,7 @@ fir::factory::readExtents(fir::FirOpBuilder &builder, mlir::Location loc,
 }
 
 llvm::SmallVector<mlir::Value>
-fir::factory::getExtents(fir::FirOpBuilder &builder, mlir::Location loc,
+fir::factory::getExtents(mlir::Location loc, fir::FirOpBuilder &builder,
                          const fir::ExtendedValue &box) {
   return box.match(
       [&](const fir::ArrayBoxValue &x) -> llvm::SmallVector<mlir::Value> {
@@ -653,7 +653,7 @@ fir::factory::getExtents(fir::FirOpBuilder &builder, mlir::Location loc,
       },
       [&](const fir::MutableBoxValue &x) -> llvm::SmallVector<mlir::Value> {
         auto load = fir::factory::genMutableBoxRead(builder, loc, x);
-        return fir::factory::getExtents(builder, loc, load);
+        return fir::factory::getExtents(loc, builder, load);
       },
       [&](const auto &) -> llvm::SmallVector<mlir::Value> { return {}; });
 }
@@ -719,6 +719,69 @@ fir::factory::getNonDeferredLengthParams(const fir::ExtendedValue &exv) {
                 box.getExplicitParameters().end()};
       },
       [&](const auto &) -> llvm::SmallVector<mlir::Value> { return {}; });
+}
+
+// If valTy is a box type, then we need to extract the type parameters from
+// the box value.
+static llvm::SmallVector<mlir::Value> getFromBox(mlir::Location loc,
+                                                 fir::FirOpBuilder &builder,
+                                                 mlir::Type valTy,
+                                                 mlir::Value boxVal) {
+  if (auto boxTy = valTy.dyn_cast<fir::BoxType>()) {
+    auto eleTy = fir::unwrapAllRefAndSeqType(boxTy.getEleTy());
+    if (auto recTy = eleTy.dyn_cast<fir::RecordType>()) {
+      if (recTy.getNumLenParams() > 0) {
+        // Walk each type parameter in the record and get the value.
+        TODO(loc, "generate code to get LEN type parameters");
+      }
+    } else if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
+      if (charTy.hasDynamicLen()) {
+        auto idxTy = builder.getIndexType();
+        auto eleSz = builder.create<fir::BoxEleSizeOp>(loc, idxTy, boxVal);
+        auto kindBytes =
+            builder.getKindMap().getCharacterBitsize(charTy.getFKind()) / 8;
+        mlir::Value charSz =
+            builder.createIntegerConstant(loc, idxTy, kindBytes);
+        mlir::Value len =
+            builder.create<mlir::arith::DivSIOp>(loc, eleSz, charSz);
+        return {len};
+      }
+    }
+  }
+  return {};
+}
+
+llvm::SmallVector<mlir::Value>
+fir::factory::getTypeParams(mlir::Location loc, fir::FirOpBuilder &builder,
+                            const fir::ExtendedValue &exv) {
+  return exv.match(
+      [&](fir::UnboxedValue val) {
+        auto valTy = fir::unwrapRefType(val.getType());
+        if (auto boxTy = valTy.dyn_cast<fir::BoxType>())
+          return getFromBox(loc, builder, boxTy, val);
+        return fir::getTypeParams(exv);
+      },
+      [&](const fir::BoxValue &boxVal) {
+        auto base = fir::getBase(boxVal);
+        auto valTy = base.getType();
+        return getFromBox(loc, builder, valTy, base);
+      },
+      [&](const fir::MutableBoxValue &boxVar) {
+        auto base = fir::getBase(boxVar);
+        auto val = builder.create<fir::LoadOp>(loc, base);
+        auto valTy = val.getType();
+        return getFromBox(loc, builder, valTy, val);
+      },
+      [&](const auto &) { return fir::getTypeParams(exv); });
+}
+
+llvm::SmallVector<mlir::Value>
+fir::factory::getTypeParams(mlir::Location loc, fir::FirOpBuilder &builder,
+                            fir::ArrayLoadOp load) {
+  mlir::Type memTy = load.getMemref().getType();
+  if (auto boxTy = memTy.dyn_cast<fir::BoxType>())
+    return getFromBox(loc, builder, boxTy, load.getMemref());
+  return load.getTypeparams();
 }
 
 std::string fir::factory::uniqueCGIdent(llvm::StringRef prefix,

@@ -420,12 +420,6 @@ llvm::SmallVector<mlir::Value> readExtents(fir::FirOpBuilder &builder,
                                            mlir::Location loc,
                                            const fir::BoxValue &box);
 
-/// Get extents from \p box. For fir::BoxValue and
-/// fir::MutableBoxValue, this will generate code to read the extents.
-llvm::SmallVector<mlir::Value> getExtents(fir::FirOpBuilder &builder,
-                                          mlir::Location loc,
-                                          const fir::ExtendedValue &box);
-
 /// Read a fir::BoxValue into an fir::UnboxValue, a fir::ArrayBoxValue or a
 /// fir::CharArrayBoxValue. This should only be called if the fir::BoxValue is
 /// known to be contiguous given the context (or if the resulting address will

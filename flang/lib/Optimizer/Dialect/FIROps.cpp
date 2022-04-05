@@ -321,6 +321,24 @@ static mlir::LogicalResult verify(fir::AllocMemOp &op) {
 // ArrayCoorOp
 //===----------------------------------------------------------------------===//
 
+// CHARACTERs and derived types with LEN PARAMETERs are dependent types that
+// require runtime values to fully define the type of an object.
+static bool validTypeParams(mlir::Type dynTy, mlir::ValueRange typeParams) {
+  dynTy = fir::unwrapAllRefAndSeqType(dynTy);
+  // A box value will contain type parameter values itself.
+  if (dynTy.isa<fir::BoxType>())
+    return typeParams.size() == 0;
+  // Derived type must have all type parameters satisfied.
+  if (auto recTy = dynTy.dyn_cast<fir::RecordType>())
+    return typeParams.size() == recTy.getNumLenParams();
+  // Characters with non-constant LEN must have a type parameter value.
+  if (auto charTy = dynTy.dyn_cast<fir::CharacterType>())
+    if (charTy.hasDynamicLen())
+      return typeParams.size() == 1;
+  // Otherwise, any type parameters are invalid.
+  return typeParams.size() == 0;
+}
+
 static mlir::LogicalResult verify(fir::ArrayCoorOp op) {
   auto eleTy = fir::dyn_cast_ptrOrBoxEleTy(op.getMemref().getType());
   auto arrTy = eleTy.dyn_cast<fir::SequenceType>();
@@ -355,7 +373,8 @@ static mlir::LogicalResult verify(fir::ArrayCoorOp op) {
       if (sliceTy.getRank() != arrDim)
         return op.emitOpError("rank of dimension in slice mismatched");
   }
-
+  if (!validTypeParams(op.getMemref().getType(), op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
@@ -396,7 +415,6 @@ static mlir::LogicalResult verify(fir::ArrayLoadOp op) {
   if (!arrTy)
     return op.emitOpError("must be a reference to an array");
   auto arrDim = arrTy.getDimension();
-
   if (auto shapeOp = op.getShape()) {
     auto shapeTy = shapeOp.getType();
     unsigned shapeTyRank = 0;
@@ -413,7 +431,6 @@ static mlir::LogicalResult verify(fir::ArrayLoadOp op) {
     if (arrDim && arrDim != shapeTyRank)
       return op.emitOpError("rank of dimension mismatched");
   }
-
   if (auto sliceOp = op.getSlice()) {
     if (auto sl = mlir::dyn_cast_or_null<fir::SliceOp>(sliceOp.getDefiningOp()))
       if (!sl.substr().empty())
@@ -422,7 +439,8 @@ static mlir::LogicalResult verify(fir::ArrayLoadOp op) {
       if (sliceTy.getRank() != arrDim)
         return op.emitOpError("rank of dimension in slice mismatched");
   }
-
+  if (!validTypeParams(op.getMemref().getType(), op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
@@ -465,6 +483,8 @@ static mlir::LogicalResult verify(fir::ArrayMergeStoreOp op) {
   if (op.getSequence().getType() != eleTy)
     return op.emitOpError(
         "type of sequence does not match memref element type");
+  if (!validTypeParams(op.getMemref().getType(), op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
@@ -494,6 +514,8 @@ static mlir::LogicalResult verify(fir::ArrayFetchOp op) {
   if (!llvm::isa_and_nonnull<fir::ArrayLoadOp>(
           op.getSequence().getDefiningOp()))
     return op.emitOpError("argument #0 must be result of fir.array_load");
+  if (!validTypeParams(arrTy, op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
@@ -512,6 +534,8 @@ static mlir::LogicalResult verify(fir::ArrayAccessOp op) {
   mlir::Type ty = validArraySubobject(op);
   if (!ty || fir::ReferenceType::get(ty) != op.getType())
     return op.emitOpError("return type and/or indices do not type check");
+  if (!validTypeParams(arrTy, op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
@@ -530,6 +554,8 @@ static mlir::LogicalResult verify(fir::ArrayUpdateOp op) {
   auto ty = validArraySubobject(op);
   if (!ty || ty != ::adjustedElementType(op.getMerge().getType()))
     return op.emitOpError("merged value and/or indices do not type check");
+  if (!validTypeParams(arrTy, op.getTypeparams()))
+    return op.emitOpError("invalid type parameters");
   return mlir::success();
 }
 
