@@ -673,7 +673,7 @@ fir::ExtendedValue fir::factory::readBoxValue(fir::FirOpBuilder &builder,
                                   fir::factory::readExtents(builder, loc, box),
                                   box.getLBounds());
   }
-  if (box.isDerivedWithLengthParameters())
+  if (box.isDerivedWithLenParameters())
     TODO(loc, "read fir.box with length parameters");
   if (box.rank() == 0)
     return addr;
@@ -704,7 +704,7 @@ fir::factory::getNonDefaultLowerBounds(fir::FirOpBuilder &builder,
 }
 
 llvm::SmallVector<mlir::Value>
-fir::factory::getNonDeferredLengthParams(const fir::ExtendedValue &exv) {
+fir::factory::getNonDeferredLenParams(const fir::ExtendedValue &exv) {
   return exv.match(
       [&](const fir::CharArrayBoxValue &character)
           -> llvm::SmallVector<mlir::Value> { return {character.getLen()}; },
@@ -751,27 +751,29 @@ static llvm::SmallVector<mlir::Value> getFromBox(mlir::Location loc,
   return {};
 }
 
+// fir::getTypeParams() will get the type parameters from the extended value.
+// When the extended value is a BoxValue or MutableBoxValue, it may be necessary
+// to generate code, so this factory function handles those cases.
+// TODO: fix the inverted type tests, etc.
 llvm::SmallVector<mlir::Value>
 fir::factory::getTypeParams(mlir::Location loc, fir::FirOpBuilder &builder,
                             const fir::ExtendedValue &exv) {
+  auto handleBoxed = [&](const auto &box) -> llvm::SmallVector<mlir::Value> {
+    if (box.isCharacter())
+      return {fir::factory::readCharLen(builder, loc, exv)};
+    if (box.isDerivedWithLenParameters()) {
+      // This should generate code to read the type parameters from the box.
+      // This requires some consideration however as MutableBoxValues need to be
+      // in a sane state to be provide the correct values.
+      TODO(loc, "derived type with type parameters");
+    }
+    return {};
+  };
+  // Intentionally reuse the original code path to get type parameters for the
+  // cases that were supported rather than introduce a new path.
   return exv.match(
-      [&](fir::UnboxedValue val) {
-        auto valTy = fir::unwrapRefType(val.getType());
-        if (auto boxTy = valTy.dyn_cast<fir::BoxType>())
-          return getFromBox(loc, builder, boxTy, val);
-        return fir::getTypeParams(exv);
-      },
-      [&](const fir::BoxValue &boxVal) {
-        auto base = fir::getBase(boxVal);
-        auto valTy = base.getType();
-        return getFromBox(loc, builder, valTy, base);
-      },
-      [&](const fir::MutableBoxValue &boxVar) {
-        auto base = fir::getBase(boxVar);
-        auto val = builder.create<fir::LoadOp>(loc, base);
-        auto valTy = val.getType();
-        return getFromBox(loc, builder, valTy, val);
-      },
+      [&](const fir::BoxValue &box) { return handleBoxed(box); },
+      [&](const fir::MutableBoxValue &box) { return handleBoxed(box); },
       [&](const auto &) { return fir::getTypeParams(exv); });
 }
 
@@ -939,7 +941,7 @@ fir::ExtendedValue fir::factory::arrayElementToExtendedValue(
           auto len = fir::factory::readCharLen(builder, loc, box);
           return fir::CharBoxValue{element, len};
         }
-        if (box.isDerivedWithLengthParameters())
+        if (box.isDerivedWithLenParameters())
           TODO(loc, "get length parameters from derived type BoxValue");
         return element;
       },

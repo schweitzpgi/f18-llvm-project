@@ -239,7 +239,7 @@ bool isRecordWithAllocatableMember(mlir::Type ty);
 /// Return true iff `ty` is a RecordType with type parameters.
 inline bool isRecordWithTypeParameters(mlir::Type ty) {
   if (auto recTy = ty.dyn_cast_or_null<fir::RecordType>())
-    return recTy.getNumLenParams() != 0;
+    return recTy.isDependentType();
   return false;
 }
 

@@ -442,7 +442,7 @@ public:
           // the original variable described by a fir.box.
           llvm::SmallVector<mlir::Value> extents =
               fir::factory::getExtents(loc, *builder, hexv);
-          if (box.isDerivedWithLengthParameters())
+          if (box.isDerivedWithLenParameters())
             TODO(loc, "get length parameters from derived type BoxValue");
           if (box.isCharacter()) {
             mlir::Value len = fir::factory::readCharLen(*builder, loc, box);
@@ -2152,9 +2152,9 @@ private:
                   llvm::SmallVector<mlir::Value> lengthParams;
                   if (const fir::CharBoxValue *charBox = rhs.getCharBox())
                     lengthParams.push_back(charBox->getLen());
-                  else if (fir::isDerivedWithLengthParameters(rhs))
+                  else if (fir::isDerivedWithLenParameters(rhs))
                     TODO(loc, "assignment to derived type allocatable with "
-                              "length parameters");
+                              "LEN parameters");
                   lhsRealloc = fir::factory::genReallocIfNeeded(
                       *builder, loc, *lhsMutableBox,
                       /*shape=*/llvm::None, lengthParams);

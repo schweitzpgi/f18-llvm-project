@@ -327,7 +327,7 @@ def fir_SaveResultOp : fir_Op<"save_result", [AttrSizedOperandSegments]> {
 
   let description = [{
     Save the result of a function returning an array, box, or record type value
-    into a memory location given the shape and length parameters of the result.
+    into a memory location given the shape and LEN parameters of the result.
 
     Function results of type fir.box, fir.array, or fir.rec are abstract values
     that require a storage to be manipulated on the caller side. This operation
@@ -336,8 +336,8 @@ def fir_SaveResultOp : fir_Op<"save_result", [AttrSizedOperandSegments]> {
     memory.
     
     For arrays, result, it is required to provide the shape of the result. For
-    character arrays and derived types with length parameters, the length
-    parameter values must be provided.
+    character arrays and derived types with LEN parameters, the LEN parameter
+    values must be provided.
 
     The fir.save_result associated to a function call must immediately follow
     the call and be in the same block.  
