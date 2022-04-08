@@ -402,7 +402,7 @@ TEST_F(FIRBuilderTest, getExtents) {
   auto loc = builder.getUnknownLoc();
   llvm::StringRef strValue("length");
   auto strLit = fir::factory::createStringLiteral(builder, loc, strValue);
-  auto ext = fir::factory::getExtents(builder, loc, strLit);
+  auto ext = fir::factory::getExtents(loc, builder, strLit);
   EXPECT_EQ(0u, ext.size());
   auto c10 = builder.createIntegerConstant(loc, builder.getI64Type(), 10);
   auto c100 = builder.createIntegerConstant(loc, builder.getI64Type(), 100);
@@ -412,6 +412,6 @@ TEST_F(FIRBuilderTest, getExtents) {
   mlir::Value array = builder.create<fir::UndefOp>(loc, arrayTy);
   fir::ArrayBoxValue aab(array, extents, {});
   fir::ExtendedValue ex(aab);
-  auto readExtents = fir::factory::getExtents(builder, loc, ex);
+  auto readExtents = fir::factory::getExtents(loc, builder, ex);
   EXPECT_EQ(2u, readExtents.size());
 }

@@ -320,6 +320,7 @@ def fir_RecordType : FIR_Type<"Record", "type"> {
     }
     unsigned getNumFields() { return getTypeList().size(); }
     unsigned getNumLenParams() { return getLenParamList().size(); }
+    bool isDependentType() { return getNumLenParams(); }
 
     void finalize(llvm::ArrayRef<TypePair> lenPList,
                   llvm::ArrayRef<TypePair> typeList);

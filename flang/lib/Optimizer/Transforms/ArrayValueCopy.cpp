@@ -859,11 +859,20 @@ static mlir::Type toRefType(mlir::Type ty) {
   return ReferenceType::get(ty);
 }
 
-static mlir::Value
-genCoorOp(mlir::PatternRewriter &rewriter, mlir::Location loc, mlir::Type eleTy,
-          mlir::Type resTy, mlir::Value alloc, mlir::Value shape,
-          mlir::Value slice, mlir::ValueRange indices,
-          mlir::ValueRange typeparams, bool skipOrig = false) {
+static llvm::SmallVector<mlir::Value>
+getTypeParamsIfRawData(mlir::Location loc, FirOpBuilder &builder,
+                       ArrayLoadOp arrLoad, mlir::Type ty) {
+  if (ty.isa<BoxType>())
+    return {};
+  return fir::factory::getTypeParams(loc, builder, arrLoad);
+}
+
+static mlir::Value genCoorOp(mlir::PatternRewriter &rewriter,
+                             mlir::Location loc, mlir::Type eleTy,
+                             mlir::Type resTy, mlir::Value alloc,
+                             mlir::Value shape, mlir::Value slice,
+                             mlir::ValueRange indices, ArrayLoadOp load,
+                             bool skipOrig = false) {
   llvm::SmallVector<mlir::Value> originated;
   if (skipOrig)
     originated.assign(indices.begin(), indices.end());
@@ -873,6 +882,9 @@ genCoorOp(mlir::PatternRewriter &rewriter, mlir::Location loc, mlir::Type eleTy,
   auto seqTy = dyn_cast_ptrOrBoxEleTy(alloc.getType());
   assert(seqTy && seqTy.isa<SequenceType>());
   const auto dimension = seqTy.cast<SequenceType>().getDimension();
+  auto module = load->getParentOfType<mlir::ModuleOp>();
+  FirOpBuilder builder(rewriter, getKindMapping(module));
+  auto typeparams = getTypeParamsIfRawData(loc, builder, load, alloc.getType());
   mlir::Value result = rewriter.create<ArrayCoorOp>(
       loc, eleTy, alloc, shape, slice,
       llvm::ArrayRef<mlir::Value>{originated}.take_front(dimension),
@@ -935,20 +947,19 @@ void genArrayCopy(mlir::Location loc, mlir::PatternRewriter &rewriter,
   }
   // Reverse the indices so they are in column-major order.
   std::reverse(indices.begin(), indices.end());
-  auto typeparams = arrLoad.typeparams();
+  auto module = arrLoad->getParentOfType<mlir::ModuleOp>();
+  FirOpBuilder builder(rewriter, getKindMapping(module));
   auto fromAddr = rewriter.create<ArrayCoorOp>(
       loc, getEleTy(src.getType()), src, shapeOp,
       CopyIn && copyUsingSlice ? sliceOp : mlir::Value{},
       factory::originateIndices(loc, rewriter, src.getType(), shapeOp, indices),
-      typeparams);
+      getTypeParamsIfRawData(loc, builder, arrLoad, src.getType()));
   auto toAddr = rewriter.create<ArrayCoorOp>(
       loc, getEleTy(dst.getType()), dst, shapeOp,
       !CopyIn && copyUsingSlice ? sliceOp : mlir::Value{},
       factory::originateIndices(loc, rewriter, dst.getType(), shapeOp, indices),
-      typeparams);
+      getTypeParamsIfRawData(loc, builder, arrLoad, dst.getType()));
   auto eleTy = unwrapSequenceType(unwrapPassByRefType(dst.getType()));
-  auto module = toAddr->getParentOfType<mlir::ModuleOp>();
-  FirOpBuilder builder(rewriter, getKindMapping(module));
   // Copy from (to) object to (from) temp copy of same object.
   if (auto charTy = eleTy.dyn_cast<CharacterType>()) {
     auto len = getCharacterLen(loc, builder, arrLoad, charTy);
@@ -1083,8 +1094,8 @@ public:
     rewriter.setInsertionPoint(op);
     auto coor = genCoorOp(
         rewriter, loc, getEleTy(load.getType()), eleTy, allocmem, shapeOp,
-        copyUsingSlice ? mlir::Value{} : load.slice(), access.indices(),
-        load.typeparams(), access->hasAttr(factory::attrFortranArrayOffsets()));
+        copyUsingSlice ? mlir::Value{} : load.slice(), access.indices(), load,
+        access->hasAttr(factory::attrFortranArrayOffsets()));
     // Copy out.
     auto *storeOp = useMap.lookup(loadOp);
     auto store = mlir::cast<ArrayMergeStoreOp>(storeOp);
@@ -1131,7 +1142,7 @@ public:
       auto coor = genCoorOp(
           rewriter, loc, getEleTy(load.getType()), lhsEltRefType, allocmem,
           shapeOp, copyUsingSlice ? mlir::Value{} : load.slice(),
-          update.indices(), load.typeparams(),
+          update.indices(), load,
           update->hasAttr(factory::attrFortranArrayOffsets()));
       assignElement(coor);
       auto *storeOp = useMap.lookup(loadOp);
@@ -1149,8 +1160,7 @@ public:
     rewriter.setInsertionPoint(op);
     auto coorTy = getEleTy(load.getType());
     auto coor = genCoorOp(rewriter, loc, coorTy, lhsEltRefType, load.memref(),
-                          load.shape(), load.slice(), update.indices(),
-                          load.typeparams(),
+                          load.shape(), load.slice(), update.indices(), load,
                           update->hasAttr(factory::attrFortranArrayOffsets()));
     assignElement(coor);
     return {coor, load.getResult()};
@@ -1225,10 +1235,10 @@ public:
     rewriter.setInsertionPoint(op);
     auto load = mlir::cast<ArrayLoadOp>(useMap.lookup(op));
     auto loc = fetch.getLoc();
-    auto coor = genCoorOp(
-        rewriter, loc, getEleTy(load.getType()), toRefType(fetch.getType()),
-        load.memref(), load.shape(), load.slice(), fetch.indices(),
-        load.typeparams(), fetch->hasAttr(factory::attrFortranArrayOffsets()));
+    auto coor = genCoorOp(rewriter, loc, getEleTy(load.getType()),
+                          toRefType(fetch.getType()), load.memref(),
+                          load.shape(), load.slice(), fetch.indices(), load,
+                          fetch->hasAttr(factory::attrFortranArrayOffsets()));
     if (isa_ref_type(fetch.getType()))
       rewriter.replaceOp(fetch, coor);
     else
@@ -1264,10 +1274,10 @@ public:
     }
     rewriter.setInsertionPoint(op);
     auto load = mlir::cast<ArrayLoadOp>(useMap.lookup(op));
-    auto coor = genCoorOp(
-        rewriter, loc, getEleTy(load.getType()), toRefType(access.getType()),
-        load.memref(), load.shape(), load.slice(), access.indices(),
-        load.typeparams(), access->hasAttr(factory::attrFortranArrayOffsets()));
+    auto coor = genCoorOp(rewriter, loc, getEleTy(load.getType()),
+                          toRefType(access.getType()), load.memref(),
+                          load.shape(), load.slice(), access.indices(), load,
+                          access->hasAttr(factory::attrFortranArrayOffsets()));
     rewriter.replaceOp(access, coor);
     return mlir::success();
   }

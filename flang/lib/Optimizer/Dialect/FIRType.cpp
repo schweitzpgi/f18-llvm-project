@@ -283,6 +283,17 @@ bool isRecordWithAllocatableMember(mlir::Type ty) {
   return false;
 }
 
+mlir::Type unwrapAllRefAndSeqType(mlir::Type ty) {
+  while (true) {
+    mlir::Type nt = unwrapSequenceType(unwrapRefType(ty));
+    if (auto vecTy = nt.dyn_cast<fir::VectorType>())
+      nt = vecTy.getEleTy();
+    if (nt == ty)
+      return ty;
+    ty = nt;
+  }
+}
+
 } // namespace fir
 
 namespace {

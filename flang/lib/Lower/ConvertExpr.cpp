@@ -307,7 +307,7 @@ createInMemoryScalarCopy(fir::FirOpBuilder &builder, mlir::Location loc,
   assert(exv.rank() == 0 && "input to scalar memory copy must be a scalar");
   if (exv.getCharBox() != nullptr)
     return fir::factory::CharacterExprHelper{builder, loc}.createTempFrom(exv);
-  if (fir::isDerivedWithLengthParameters(exv))
+  if (fir::isDerivedWithLenParameters(exv))
     TODO(loc, "copy derived type with length parameters");
   mlir::Type type = fir::unwrapPassByRefType(fir::getBase(exv).getType());
   fir::ExtendedValue temp = builder.createTemporary(loc, type);
@@ -858,7 +858,7 @@ public:
   }
 
   static bool
-  isDerivedTypeWithLengthParameters(const Fortran::semantics::Symbol &sym) {
+  isDerivedTypeWithLenParameters(const Fortran::semantics::Symbol &sym) {
     if (const Fortran::semantics::DeclTypeSpec *declTy = sym.GetType())
       if (const Fortran::semantics::DerivedTypeSpec *derived =
               declTy->AsDerived())
@@ -909,7 +909,7 @@ public:
         continue;
       }
 
-      if (isDerivedTypeWithLengthParameters(sym))
+      if (isDerivedTypeWithLenParameters(sym))
         TODO(loc, "component with length parameters in structure constructor");
 
       if (isBuiltinCPtr(sym)) {
@@ -979,7 +979,7 @@ public:
       if (sym.test(Fortran::semantics::Symbol::Flag::ParentComp))
         TODO(loc, "parent component in structure constructor");
 
-      if (isDerivedTypeWithLengthParameters(sym))
+      if (isDerivedTypeWithLenParameters(sym))
         TODO(loc, "component with length parameters in structure constructor");
 
       llvm::StringRef name = toStringRef(sym.name());
@@ -2078,7 +2078,7 @@ public:
     mlir::Value box = builder.createBox(loc, exv);
     return fir::BoxValue(
         box, fir::factory::getNonDefaultLowerBounds(builder, loc, exv),
-        fir::factory::getNonDeferredLengthParams(exv));
+        fir::factory::getNonDeferredLenParams(exv));
   }
 
   /// Generate a call to an intrinsic function.
@@ -2309,7 +2309,7 @@ public:
     assert(type && "expected descriptor or memory type");
     mlir::Location loc = getLoc();
     llvm::SmallVector<mlir::Value> extents =
-        fir::factory::getExtents(builder, loc, mold);
+        fir::factory::getExtents(loc, builder, mold);
     llvm::SmallVector<mlir::Value> allocMemTypeParams =
         fir::getTypeParams(mold);
     mlir::Value charLen;
@@ -2631,7 +2631,7 @@ public:
         [&](const fir::BoxValue &x) -> ExtValue {
           // Derived type scalar that may be polymorphic.
           assert(!x.hasRank() && x.isDerived());
-          if (x.isDerivedWithLengthParameters())
+          if (x.isDerivedWithLenParameters())
             fir::emitFatalError(
                 loc, "making temps for derived type with length parameters");
           // TODO: polymorphic aspects should be kept but for now the temp
@@ -3471,8 +3471,8 @@ public:
     // character, it cannot be taken from array_loads since it may be
     // changed by concatenations).
     if ((mutableBox.isCharacter() && !mutableBox.hasNonDeferredLenParams()) ||
-        mutableBox.isDerivedWithLengthParameters())
-      TODO(loc, "gather rhs length parameters in assignment to allocatable");
+        mutableBox.isDerivedWithLenParameters())
+      TODO(loc, "gather rhs LEN parameters in assignment to allocatable");
 
     // The allocatable must take lower bounds from the expr if it is
     // reallocated and the right hand side is not a scalar.
@@ -3812,7 +3812,7 @@ public:
 
 private:
   void determineShapeOfDest(const fir::ExtendedValue &lhs) {
-    destShape = fir::factory::getExtents(builder, getLoc(), lhs);
+    destShape = fir::factory::getExtents(getLoc(), builder, lhs);
   }
 
   void determineShapeOfDest(const Fortran::lower::SomeExpr &lhs) {
@@ -3851,7 +3851,7 @@ private:
     mlir::Location loc = getLoc();
     mlir::IndexType idxTy = builder.getIndexType();
     llvm::SmallVector<mlir::Value> definedShape =
-        fir::factory::getExtents(builder, loc, exv);
+        fir::factory::getExtents(loc, builder, exv);
     mlir::Value one = builder.createIntegerConstant(loc, idxTy, 1);
     for (auto ss : llvm::enumerate(x.subscript())) {
       std::visit(Fortran::common::visitors{
@@ -3951,7 +3951,7 @@ private:
         // Get a reference to the array element to be amended.
         auto arrayOp = builder.create<fir::ArrayAccessOp>(
             loc, resRefTy, innerArg, iterSpace.iterVec(),
-            destination.typeparams());
+            fir::factory::getTypeParams(loc, builder, destination));
         if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
           llvm::SmallVector<mlir::Value> substringBounds;
           populateBounds(substringBounds, substring);
@@ -4396,7 +4396,7 @@ private:
     auto seqTy = type.dyn_cast<fir::SequenceType>();
     assert(seqTy && "must be an array");
     mlir::Location loc = getLoc();
-    // TODO: Need to thread the length parameters here. For character, they may
+    // TODO: Need to thread the LEN parameters here. For character, they may
     // differ from the operands length (e.g concatenation). So the array loads
     // type parameters are not enough.
     if (auto charTy = seqTy.getEleTy().dyn_cast<fir::CharacterType>())
@@ -4404,7 +4404,7 @@ private:
         TODO(loc, "character array expression temp with dynamic length");
     if (auto recTy = seqTy.getEleTy().dyn_cast<fir::RecordType>())
       if (recTy.getNumLenParams() > 0)
-        TODO(loc, "derived type array expression temp with length parameters");
+        TODO(loc, "derived type array expression temp with LEN parameters");
     mlir::Value temp = seqTy.hasConstantShape()
                            ? builder.create<fir::AllocMemOp>(loc, type)
                            : builder.create<fir::AllocMemOp>(
@@ -5350,8 +5350,8 @@ private:
                   // TODO: Avoid creating a new evaluate::Expr here
                   auto arrExpr = ignoreEvConvert(e);
                   if (createDestShape) {
-                    destShape.push_back(fir::getExtentAtDimension(
-                        arrayExv, builder, loc, subsIndex));
+                    destShape.push_back(fir::factory::getExtentAtDimension(
+                        loc, builder, arrayExv, subsIndex));
                   }
                   auto genArrFetch =
                       genVectorSubscriptArrayFetch(arrExpr, shapeIndex);
@@ -5641,7 +5641,7 @@ private:
       // copy-in copy-out semantics.
       return [=](IterSpace) -> ExtValue { return arrLd; };
     }
-    mlir::Operation::operand_range arrLdTypeParams = arrLoad.typeparams();
+    auto arrLdTypeParams = fir::factory::getTypeParams(loc, builder, arrLoad);
     if (isValueAttribute()) {
       // Semantics are value attribute.
       // Here the continuation will `array_fetch` a value from an array and
@@ -5861,7 +5861,7 @@ private:
     mlir::Value multiplier = builder.createIntegerConstant(loc, idxTy, 1);
     if (fir::hasDynamicSize(eleTy)) {
       if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
-        // Array of char with dynamic length parameter. Downcast to an array
+        // Array of char with dynamic LEN parameter. Downcast to an array
         // of singleton char, and scale by the len type parameter from
         // `exv`.
         exv.match(
@@ -6544,7 +6544,8 @@ private:
         if (isAdjustedArrayElementType(eleTy)) {
           mlir::Type eleRefTy = builder.getRefType(eleTy);
           auto arrayOp = builder.create<fir::ArrayAccessOp>(
-              loc, eleRefTy, innerArg, iters.iterVec(), load.typeparams());
+              loc, eleRefTy, innerArg, iters.iterVec(),
+              fir::factory::getTypeParams(loc, builder, load));
           if (auto charTy = eleTy.dyn_cast<fir::CharacterType>()) {
             mlir::Value dstLen = fir::factory::genLenOfCharacter(
                 builder, loc, load, iters.iterVec(), substringBounds);
@@ -6594,7 +6595,8 @@ private:
         mlir::Type resTy = builder.getRefType(eleTy);
         // Use array element reference semantics.
         auto access = builder.create<fir::ArrayAccessOp>(
-            loc, resTy, load, iters.iterVec(), load.typeparams());
+            loc, resTy, load, iters.iterVec(),
+            fir::factory::getTypeParams(loc, builder, load));
         mlir::Value newBase = access;
         if (fir::isa_char(eleTy)) {
           mlir::Value dstLen = fir::factory::genLenOfCharacter(
